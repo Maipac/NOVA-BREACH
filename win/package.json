@@ -1,0 +1,19 @@
+{
+  "name": "nova-breach",
+  "productName": "NOVA BREACH",
+  "version": "1.0.0",
+  "description": "NOVA BREACH – PvE-Arena-Shooter (Windows-Port mit Three.js)",
+  "main": "electron/main.cjs",
+  "private": true,
+  "scripts": {
+    "bundle": "node build.mjs",
+    "start": "node build.mjs && electron .",
+    "autotest": "node build.mjs && electron . --autotest"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "electron": "^45.3.0",
+    "esbuild": "^0.28.2",
+    "three": "^0.187.0"
+  }
+}

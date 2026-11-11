@@ -1,0 +1,25 @@
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+const canvas = document.getElementById('view');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+const scene = new THREE.Scene();
+const cam = new THREE.PerspectiveCamera(64, innerWidth / innerHeight, 0.1, 100);
+cam.position.set(2, 1.5, 3); cam.lookAt(0, 0.5, 0);
+const m = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0x22ddff, emissiveIntensity: 4 });
+const cube = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), m); cube.position.y = 0.5; scene.add(cube);
+scene.add(new THREE.Mesh(new THREE.PlaneGeometry(20, 20).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x334455 })));
+scene.add(new THREE.DirectionalLight(0xffffff, 2));
+const rt = new THREE.WebGLRenderTarget(innerWidth, innerHeight, { type: THREE.HalfFloatType, samples: 4 });
+const composer = new EffectComposer(renderer, rt);
+composer.addPass(new RenderPass(scene, cam));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.6, 0.5, 1.0));
+composer.addPass(new OutputPass());
+let frames = 0;
+window.__nova = { debugState: () => ({ frames, gl: renderer.getContext().getParameter(renderer.getContext().VERSION), webgl2: renderer.capabilities.isWebGL2 }) };
+function loop() { frames++; cube.rotation.y += 0.01; composer.render(); requestAnimationFrame(loop); }
+loop();

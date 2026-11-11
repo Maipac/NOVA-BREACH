@@ -1,0 +1,15 @@
+{
+  "appId": "games.novabreach.arena",
+  "productName": "NOVA BREACH",
+  "copyright": "NOVA BREACH – prozedural erzeugter Arena-Shooter",
+  "directories": { "output": "../dist/windows" },
+  "files": ["electron/**/*", "app/**/*", "package.json"],
+  "asar": true,
+  "electronLanguages": ["de", "en-US"],
+  "win": {
+    "target": [{ "target": "portable", "arch": ["x64"] }],
+    "icon": "app/icon.png",
+    "signExecutable": false
+  },
+  "portable": { "artifactName": "NovaBreach.exe" }
+}
