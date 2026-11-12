@@ -10,6 +10,7 @@ const fs = require('fs');
 const args = process.argv.slice(1);
 const argValue = (name) => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : null; };
 const autotest = argValue('--autotest');
+const inputtest = args.includes('--inputtest');
 const windowed = args.includes('--windowed') || !!autotest;
 
 app.commandLine.appendSwitch('force_high_performance_gpu');
@@ -43,7 +44,7 @@ function createWindow() {
 
   const query = {};
   if (autotest) {
-    query.demo = args.includes('--menu') ? '0' : '1';
+    query.demo = (args.includes('--menu') || inputtest) ? '0' : '1';
     query.mute = '1';
     query.autotest = '1';
     if (argValue('--wave')) query.wave = argValue('--wave');
@@ -58,7 +59,43 @@ function createWindow() {
   ipcMain.on('nova:toggle-fullscreen', () => win.setFullScreen(!win.isFullScreen()));
   ipcMain.on('nova:quit', () => app.quit());
 
-  if (autotest) {
+  if (autotest && inputtest) {
+    // real input events through Chromium (no autopilot): click to start, walk, switch weapon, fire, pause
+    const wc = win.webContents;
+    const state = () => wc.executeJavaScript('JSON.stringify(window.__nova.debugState())');
+    const key = (keyCode, type) => wc.sendInputEvent({ type, keyCode });
+    const click = (type) => wc.sendInputEvent({ type, x: 800, y: 450, button: 'left', clickCount: 1 });
+    const step = (ms, fn) => new Promise((r) => setTimeout(() => { fn(); r(); }, ms));
+    (async () => {
+      await step(4000, () => {});
+      console.log('t0 ', await state());
+      await step(100, () => click('mouseDown'));
+      await step(80, () => click('mouseUp'));
+      await step(600, () => {});
+      console.log('started', await state());
+      await step(50, () => key('W', 'keyDown'));
+      await step(1500, () => key('W', 'keyUp'));
+      console.log('walked', await state());
+      await step(50, () => key('3', 'keyDown'));
+      await step(60, () => key('3', 'keyUp'));
+      await step(700, () => {});
+      console.log('weapon3', await state());
+      await step(50, () => click('mouseDown'));
+      await step(120, () => click('mouseUp'));
+      await step(300, () => {});
+      console.log('fired', await state());
+      await step(50, () => wc.sendInputEvent({ type: 'mouseWheel', x: 800, y: 450, deltaX: 0, deltaY: -120 }));
+      await step(500, () => {});
+      console.log('wheel', await state());
+      await step(50, () => key('Escape', 'keyDown'));
+      await step(60, () => key('Escape', 'keyUp'));
+      await step(400, () => {});
+      console.log('esc', await state());
+      const img = await wc.capturePage();
+      fs.writeFileSync(autotest, img.toPNG());
+      app.exit(0);
+    })().catch((e) => { console.log('inputtest failed', String(e)); app.exit(1); });
+  } else if (autotest) {
     const at = Number(argValue('--at') || 12);
     win.webContents.on('console-message', (e) => {
       if (e.level === 'error' || e.level === 'warning') console.log(`[renderer ${e.level}] ${e.message} (${path.basename(e.sourceId || '')}:${e.lineNumber})`);

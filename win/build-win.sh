@@ -16,7 +16,7 @@ rm -rf ../dist/windows
 node_modules/.bin/electron-builder --win portable --x64 --config electron-builder.json
 
 echo "==> Erzeuge ZIP-Variante"
-( cd ../dist/windows && rm -rf "NOVA BREACH" && mv win-unpacked "NOVA BREACH" && zip -qr NovaBreach-Windows.zip "NOVA BREACH" && rm -rf "NOVA BREACH" builder-debug.yml builder-effective-config.yaml )
+( cd ../dist/windows && rm -rf "NOVA BREACH" && mv win-unpacked "NOVA BREACH" && zip -qr NovaBreach-Windows.zip "NOVA BREACH" && rm -rf "NOVA BREACH" builder-debug.yml builder-effective-config.yaml .icon-ico )
 
 ls -lh ../dist/windows
 echo "Fertig: dist/windows/NovaBreach.exe"

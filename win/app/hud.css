@@ -1,1 +1,207 @@
-/* HUD styles (owner: hud.js) */
+/* HUD styles for src/hud.js (port of HUD.swift).
+ *
+ * Coordinate model: every anchor is a zero-size point scaled by --s (Swift's setScale(s)).
+ * Children are placed with left/bottom in SpriteKit numbers (y grows upward), so a child's
+ * `bottom: y` means "y points above the anchor". Labels sit on their baseline unless they carry
+ * .hud-vc (vertically centred).
+ */
+
+.hud-root {
+  --s: 1;
+  --m: calc(34px * var(--s));
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  color: #fff;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: geometricPrecision;
+}
+.hud-root * { pointer-events: none; }
+
+/* ---- fonts: Avenir Next Condensed on macOS, Bahnschrift (variable, condensed axis) on Windows */
+.hud-fh {
+  font-family: 'Bahnschrift', 'Avenir Next Condensed', 'Arial Narrow', 'Impact', sans-serif;
+  font-weight: 800;
+  font-stretch: condensed;
+  font-variation-settings: 'wdth' 75, 'wght' 700;
+  letter-spacing: 0.01em;
+}
+.hud-fd {
+  font-family: 'Bahnschrift', 'Avenir Next Condensed', 'Arial Narrow', sans-serif;
+  font-weight: 600;
+  font-stretch: condensed;
+  font-variation-settings: 'wdth' 75, 'wght' 500;
+}
+.hud-fm {
+  font-family: 'Consolas', 'Menlo', 'Courier New', monospace;
+  font-weight: 700;
+}
+
+/* ---- layers (z order as in Swift: effects 1 < game 5 < dim 20 < menu 30) */
+.hud-fx {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  opacity: 0;
+  visibility: hidden;
+  background-size: 100% 100%;
+}
+.hud-flash { z-index: 2; }
+.hud-game { position: absolute; inset: 0; z-index: 5; transition: opacity 0.12s linear; }
+.hud-game.hud-off { opacity: 0; visibility: hidden; }
+.hud-dim {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: rgb(0, 5, 13);
+  opacity: 0;
+  visibility: hidden;
+}
+
+/* ---- anchors */
+.hud-anchor {
+  position: absolute;
+  width: 0;
+  height: 0;
+  transform: scale(var(--s));
+  transform-origin: 0 0;
+}
+.hud-center { left: 50%; top: 50%; }
+.hud-bl { left: var(--m); top: calc(100% - var(--m)); }
+.hud-br { left: calc(100% - var(--m)); top: calc(100% - var(--m)); }
+.hud-tl { left: var(--m); top: var(--m); }
+.hud-tr { left: calc(100% - var(--m)); top: var(--m); }
+.hud-tc { left: 50%; top: 0; }
+.hud-overlay { left: 50%; top: 50%; z-index: 30; }
+/* Swift: announce at y = h * 0.68 (from the bottom), the sub line 44 * s below it */
+.hud-announce { left: 50%; top: 32%; }
+.hud-announce-sub { left: 50%; top: calc(32% + 44px * var(--s)); }
+
+.hud-node { position: absolute; width: 0; height: 0; }
+
+/* ---- labels (SKLabelNode) */
+.hud-lb {
+  position: absolute;
+  white-space: pre;
+  line-height: 1;
+  text-shadow: 0 0 6px rgba(0, 0, 0, 0.35);
+}
+/* baseline alignment: the bottom edge sits one descent below the anchor */
+.hud-lb.hud-vb { transform: translateY(0.2em); }
+.hud-lb.hud-vb.hud-hc { transform: translate(-50%, 0.2em); }
+.hud-lb.hud-vc { transform: translateY(-50%); }
+.hud-lb.hud-vc.hud-hc { transform: translate(-50%, -50%); }
+
+/* ---- slanted bars (shear is set inline; it pivots on the bottom-left corner like the Swift path) */
+.hud-bar { position: absolute; transform-origin: 0 100%; }
+.hud-bar-bg {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1.5px solid transparent;
+  box-sizing: border-box;
+}
+.hud-bar-fill { position: absolute; inset: 0; transform-origin: 0 50%; }
+
+/* ---- crosshair */
+.hud-cross {
+  position: absolute;
+  background: #fff;
+  border-radius: 1px;
+  box-shadow: 0 0 0 0.8px rgba(0, 0, 0, 0.5);
+}
+.hud-cross-h { width: 9px; height: 2.2px; left: -4.5px; top: -1.1px; }
+.hud-cross-v { width: 2.2px; height: 9px; left: -1.1px; top: -4.5px; }
+.hud-cross-dot {
+  position: absolute;
+  width: 3.2px;
+  height: 3.2px;
+  left: -1.6px;
+  top: -1.6px;
+  border-radius: 50%;
+  background: rgb(89, 235, 255);
+}
+.hud-hitmarker { opacity: 0; color: #fff; }
+.hud-hitline {
+  position: absolute;
+  width: 12px;
+  height: 2.6px;
+  left: -6px;
+  top: -1.3px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+/* damage direction arcs (radius 120, drawn into a 280 px viewBox around the crosshair) */
+.hud-arc {
+  position: absolute;
+  width: 280px;
+  height: 280px;
+  left: -140px;
+  top: -140px;
+  overflow: visible;
+  opacity: 0;
+  visibility: hidden;
+  filter: drop-shadow(0 0 3px rgba(255, 64, 51, 0.9));
+}
+.hud-arc path { fill: none; stroke: rgb(255, 64, 51); stroke-width: 9; stroke-linecap: round; }
+
+/* ---- weapon slots */
+.hud-slot {
+  position: absolute;
+  width: 64px;
+  height: 22px;
+  left: -32px;
+  top: -11px;
+  box-sizing: border-box;
+  border: 1.5px solid rgba(153, 191, 217, 0.35);
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.4);
+}
+
+/* ---- radar */
+.hud-radar-ring, .hud-radar-ring2 { position: absolute; border-radius: 50%; box-sizing: border-box; }
+.hud-radar-ring {
+  width: 156px;
+  height: 156px;
+  left: -78px;
+  top: -78px;
+  background: rgba(0, 20, 31, 0.5);
+  border: 1.5px solid rgba(89, 235, 255, 0.7);
+}
+.hud-radar-ring2 {
+  width: 78px;
+  height: 78px;
+  left: -39px;
+  top: -39px;
+  border: 1px solid rgba(89, 235, 255, 0.25);
+}
+.hud-radar-me {
+  position: absolute;
+  width: 10px;
+  height: 12px;
+  left: -5px;
+  top: -7px;
+  background: #fff;
+  clip-path: polygon(50% 0, 100% 100%, 0 100%);
+}
+.hud-blip {
+  position: absolute;
+  width: 6px;
+  height: 6px;
+  left: -3px;
+  top: -3px;
+  border-radius: 50%;
+  background: rgb(255, 64, 51);
+  display: none;
+}
+
+/* ---- menus */
+.hud-menu { opacity: 1; }
+.hud-menu-line { position: absolute; width: 760px; height: 2px; background: rgb(89, 235, 255); }
+.hud-blink { animation: hud-blink 1.4s ease-in-out infinite; }
+@keyframes hud-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}

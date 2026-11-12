@@ -95,12 +95,12 @@ function nowSeconds() {
 }
 
 /** Frees the GPU resources of a node that leaves the scene for good (enemies, shots, pickups on restart). */
-function disposeTree(root) {
+function disposeTree(root, geometries = true) {
   root.traverse((o) => {
     const m = o.material;
     if (Array.isArray(m)) m.forEach((x) => x.dispose()); else if (m) m.dispose();
     // every THREE.Sprite shares one module-level geometry – leave that one alone
-    if (o.geometry && !o.isSprite) o.geometry.dispose();
+    if (geometries && o.geometry && !o.isSprite) o.geometry.dispose();
   });
 }
 
@@ -332,7 +332,8 @@ export class Game {
   }
 
   startGame() {
-    for (const e of this.enemies) { e.node.removeFromParent(); disposeTree(e.node); }
+    // enemy geometries are shared by all enemies (enemies.js cache): free only their materials
+    for (const e of this.enemies) { e.node.removeFromParent(); disposeTree(e.node, false); }
     for (const p of this.projectiles) {
       if (p.trail) p.trail.remove();
       p.node.removeFromParent(); disposeTree(p.node);
@@ -770,6 +771,9 @@ export class Game {
       pickups: this.pickups.length,
       fps: Math.round(this.fpsAverage * 10) / 10,
       weapon: w ? w.def.name : null,
+      pos: { x: Math.round(this.pos.x * 100) / 100, y: Math.round(this.pos.y * 100) / 100, z: Math.round(this.pos.z * 100) / 100 },
+      yaw: Math.round(this.yaw * 1000) / 1000,
+      shotsFired: this.shotsFired,
     };
   }
 }

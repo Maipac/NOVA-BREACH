@@ -28,6 +28,28 @@ Wellen-Survival: Gegner kommen durch die vier roten Portale, alle 5 Wellen ein B
 Schild lädt sich nach 4 Sekunden ohne Treffer wieder auf, Vital nur über grüne Pickups.
 Kopf-/Kerntreffer machen doppelten Schaden. Rollminen explodieren und reißen andere Gegner mit.
 
+## Windows
+
+`dist/windows/NovaBreach.exe` auf einen Windows-PC (10/11, 64 Bit) kopieren und starten – kein Installer, die Datei entpackt sich beim Start selbst. Alternativ `dist/windows/NovaBreach-Windows.zip` entpacken und `NOVA BREACH.exe` im Ordner starten (startet schneller).
+
+Die Windows-Version ist ein Port nach JavaScript + three.js (WebGL 2) in einer Electron-Hülle, mit denselben Werten, Gegnern, Waffen, Sounds und Texten. Die Auflösung passt sich automatisch an, damit es auch auf Laptops mit integrierter Grafik flüssig bleibt. Die exe ist nicht signiert: Windows SmartScreen zeigt beim ersten Start „Der Computer wurde durch Windows geschützt“ → *Weitere Informationen* → *Trotzdem ausführen*.
+
+![Windows-Version](docs/screenshot-windows.png)
+
+Neu bauen (läuft auf dem Mac, braucht nur Node.js):
+
+```bash
+win/build-win.sh
+```
+
+Tests ohne Windows (gleiche Chromium-Engine wie die exe):
+
+```bash
+cd win && node build.mjs && node_modules/.bin/electron . --autotest /tmp/frame.png --wave 5 --at 20
+```
+
+`--inputtest` schickt echte Klicks/Tasten statt Autopilot, `--mortal` testet Game Over, `--query "pose=lineup"` zeigt alle Gegner.
+
 ## Bauen
 
 Braucht nur die Xcode Command Line Tools (kein volles Xcode):

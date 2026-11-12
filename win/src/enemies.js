@@ -284,7 +284,8 @@ export class Enemy {
     const e = on ? 1 : 0;
     for (const m of this.armor) {
       m.emissive.setRGB(e, e, e);
-      m.emissiveIntensity = on ? 1.6 : 0;
+      // Swift used 1.6 on SceneKit's emission; three's bloom picks up HDR white much harder, 0.55 reads the same
+      m.emissiveIntensity = on ? 0.55 : 0;
     }
   }
 

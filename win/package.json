@@ -8,12 +8,15 @@
   "scripts": {
     "bundle": "node build.mjs",
     "start": "node build.mjs && electron .",
-    "autotest": "node build.mjs && electron . --autotest"
+    "autotest": "node build.mjs && electron . --autotest",
+    "dist:win": "./build-win.sh"
   },
   "devDependencies": {
     "@electron/packager": "^20.3.0",
     "electron": "^45.3.0",
+    "electron-builder": "^26.18.0",
     "esbuild": "^0.28.2",
     "three": "^0.187.0"
-  }
+  },
+  "author": "NOVA BREACH"
 }

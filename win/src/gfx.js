@@ -136,15 +136,17 @@ export const Geo = {
   },
 
   /**
-   * Rewrites UVs as a box projection in metres so textures tile every `tile` metres (`tileV` vertically),
-   * with v = 0 at the bottom of the geometry. Works for BoxGeometry and RoundedBoxGeometry.
+   * Rewrites UVs as a box projection in metres so textures tile every `tile` metres (`tileV` vertically).
+   * Like SceneKit's contentsTransform scale, the pattern starts at the TOP edge of each side face
+   * (texture top = top of the box), so wall tiers and crate stripes land where they did on the Mac.
+   * Works for BoxGeometry and RoundedBoxGeometry.
    */
   tileUV(geo, tile, tileV = tile) {
     geo.computeBoundingBox();
-    const min = geo.boundingBox.min;
+    const min = geo.boundingBox.min, max = geo.boundingBox.max;
     const pos = geo.attributes.position, nor = geo.attributes.normal, uv = geo.attributes.uv;
     for (let i = 0; i < pos.count; i++) {
-      const x = pos.getX(i) - min.x, y = pos.getY(i) - min.y, z = pos.getZ(i) - min.z;
+      const x = pos.getX(i) - min.x, y = pos.getY(i) - max.y, z = pos.getZ(i) - min.z;
       const ax = Math.abs(nor.getX(i)), ay = Math.abs(nor.getY(i)), az = Math.abs(nor.getZ(i));
       if (ay >= ax && ay >= az) uv.setXY(i, x / tile, z / tile);
       else if (ax >= az) uv.setXY(i, z / tile, y / tileV);
