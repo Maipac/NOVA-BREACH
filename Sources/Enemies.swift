@@ -2,7 +2,7 @@ import SceneKit
 import simd
 
 enum EnemyKind: Int, CaseIterable {
-    case skitter, drone, trooper, roller, brute, boss
+    case skitter, drone, trooper, roller, brute, boss, tyrant
 
     var displayName: String {
         switch self {
@@ -12,14 +12,17 @@ enum EnemyKind: Int, CaseIterable {
         case .roller: return "ROLLMINE"
         case .brute: return "KOLOSS"
         case .boss: return "OVERSEER"
+        case .tyrant: return "HITLER"
         }
     }
-    var hp: Float { [38, 30, 95, 45, 420, 2600][rawValue] }
-    var speed: Float { [6.6, 6.0, 3.6, 8.6, 2.3, 3.0][rawValue] }
-    var radius: Float { [0.6, 0.6, 0.45, 0.6, 1.0, 2.3][rawValue] }
-    var height: Float { [0.9, 1.0, 1.95, 1.1, 3.1, 4.0][rawValue] }
-    var score: Int { [50, 75, 150, 100, 500, 5000][rawValue] }
-    var cost: Float { [1, 1.5, 3, 2, 9, 0][rawValue] }
+    var hp: Float { [38, 30, 95, 45, 420, 2600, 4000][rawValue] }
+    var speed: Float { [6.6, 6.0, 3.6, 8.6, 2.3, 3.0, 1.9][rawValue] }
+    var radius: Float { [0.6, 0.6, 0.45, 0.6, 1.0, 2.3, 2.2][rawValue] }
+    var height: Float { [0.9, 1.0, 1.95, 1.1, 3.1, 4.0, 8.5][rawValue] }
+    var score: Int { [50, 75, 150, 100, 500, 5000, 15000][rawValue] }
+    var cost: Float { [1, 1.5, 3, 2, 9, 0, 0][rawValue] }
+    /// shows a boss health bar
+    var isBoss: Bool { self == .boss || self == .tyrant }
     var flies: Bool { self == .drone || self == .boss }
     var glow: V3 {
         switch self {
@@ -29,6 +32,7 @@ enum EnemyKind: Int, CaseIterable {
         case .roller: return V3(1.0, 0.8, 0.1)
         case .brute: return V3(1.0, 0.32, 0.05)
         case .boss: return V3(1.0, 0.1, 0.18)
+        case .tyrant: return V3(1.0, 0.12, 0.08)
         }
     }
 }
@@ -67,6 +71,8 @@ final class Enemy {
     var hits: [HitSphere] = []
     var muzzles: [V3] = []
     var debrisMat: SCNMaterial
+    /// tyrant: sign of the last footstep phase (a change means a foot hit the floor)
+    var stepSign: Float = 1
 
     var forward: V3 { V3(sin(yaw), 0, cos(yaw)) }
     var right: V3 { V3(cos(yaw), 0, -sin(yaw)) }
@@ -234,8 +240,99 @@ final class Enemy {
             let g2 = Geo.glowSprite(5, V3(1, 0.4, 0.1), 0.5); g2.simdPosition = V3(0, -3.1, 0); model.addChildNode(g2)
             hits = [HitSphere(offset: V3(0, 0, 0), r: 2.0, crit: false), HitSphere(offset: V3(0, 0, 1.45), r: 0.85, crit: true)]
             muzzles = [V3(0, 0, 2.2), V3(1.6, -0.6, 1.4), V3(-1.6, -0.6, 1.4)]
+        case .tyrant:
+            buildTyrant()
         }
         debrisMat = armor.last ?? dark
+    }
+
+    /// Fabric / skin / leather material that still takes the white hit flash.
+    private func cloth(_ c: V3, rough: Float = 0.8, metal: Float = 0.04) -> SCNMaterial {
+        let m = Mat.metal(c, rough: rough, metal: metal, plating: 0)
+        armor.append(m)
+        return m
+    }
+
+    /// The wave-15 boss: an 8.5 m giant in brown uniform. Built in human units (1.85 m) inside `body`,
+    /// which is scaled up by k; hit spheres and muzzles are in world units.
+    /// legs = [hipL, kneeL, hipR, kneeR], spinners = [shoulderL, elbowL, shoulderR, elbowR, head]
+    private func buildTyrant() {
+        let k: Float = 4.6
+        let body = SCNNode()
+        body.simdScale = V3(k, k, k)
+        model.addChildNode(body)
+        let jacket = cloth(V3(0.40, 0.31, 0.19), rough: 0.85)
+        let breeches = cloth(V3(0.36, 0.28, 0.17), rough: 0.85)
+        let leather = cloth(V3(0.03, 0.025, 0.02), rough: 0.25, metal: 0.15)
+        let belt = cloth(V3(0.05, 0.035, 0.025), rough: 0.4, metal: 0.1)
+        let brass = cloth(V3(0.62, 0.5, 0.26), rough: 0.3, metal: 1)
+        let skin = cloth(V3(0.86, 0.68, 0.58), rough: 0.6, metal: 0)
+        let hair = cloth(V3(0.04, 0.035, 0.03), rough: 0.45, metal: 0)
+        let eye = Mat.glow(V3(1.0, 0.12, 0.06), 8)
+        func p(_ parent: SCNNode, _ g: SCNGeometry, _ m: SCNMaterial, _ pos: V3, rot: V3 = V3(0, 0, 0), shadow: Bool = true) -> SCNNode {
+            Geo.part(parent, g, m, pos, rot: rot, shadow: shadow)
+        }
+        func joint(_ parent: SCNNode, _ pos: V3) -> SCNNode {
+            let n = SCNNode(); n.simdPosition = pos; parent.addChildNode(n); return n
+        }
+        for sd in [Float(-1), 1] {
+            // riding breeches + tall boots
+            let hip = joint(body, V3(sd * 0.11, 0.95, 0))
+            _ = p(hip, Geo.capsule(0.09, 0.52), breeches, V3(0, -0.24, 0))
+            p(hip, Geo.sphere(0.1, segments: 16), breeches, V3(sd * 0.025, -0.2, 0)).simdScale = V3(1.15, 1.3, 1)
+            let knee = joint(hip, V3(0, -0.47, 0))
+            _ = p(knee, Geo.capsule(0.072, 0.46), leather, V3(0, -0.21, 0))
+            _ = p(knee, Geo.box(0.11, 0.08, 0.27, chamfer: 0.03), leather, V3(0, -0.44, 0.05))
+            legs.append(hip); legs.append(knee)
+        }
+        // uniform jacket, belt, cross strap, buttons, pockets, collar
+        _ = p(body, Geo.box(0.4, 0.3, 0.24, chamfer: 0.06), jacket, V3(0, 1.08, 0))
+        _ = p(body, Geo.box(0.44, 0.34, 0.25, chamfer: 0.08), jacket, V3(0, 1.35, 0))
+        _ = p(body, Geo.box(0.41, 0.05, 0.25, chamfer: 0.01), belt, V3(0, 1.0, 0))
+        _ = p(body, Geo.box(0.06, 0.04, 0.02, chamfer: 0.005), brass, V3(0, 1.0, 0.13), shadow: false)
+        _ = p(body, Geo.box(0.035, 0.62, 0.012), belt, V3(0.05, 1.3, 0.128), rot: V3(0, 0, 0.45), shadow: false)
+        for i in 0..<4 { _ = p(body, Geo.sphere(0.012, segments: 8), brass, V3(0, 1.1 + Float(i) * 0.09, 0.128), shadow: false) }
+        for sd in [Float(-1), 1] {
+            _ = p(body, Geo.box(0.1, 0.08, 0.012, chamfer: 0.005), jacket, V3(sd * 0.1, 1.38, 0.128), shadow: false)
+            _ = p(body, Geo.sphere(0.085, segments: 16), jacket, V3(sd * 0.24, 1.47, 0))
+        }
+        _ = p(body, Geo.box(0.2, 0.06, 0.2, chamfer: 0.02), jacket, V3(0, 1.53, 0))
+        _ = p(body, Geo.box(0.03, 0.12, 0.01), belt, V3(0, 1.47, 0.128), shadow: false)
+        // arms
+        for sd in [Float(-1), 1] {
+            let shoulder = joint(body, V3(sd * 0.27, 1.47, 0))
+            _ = p(shoulder, Geo.capsule(0.065, 0.34), jacket, V3(0, -0.16, 0))
+            let elbow = joint(shoulder, V3(0, -0.32, 0))
+            _ = p(elbow, Geo.capsule(0.058, 0.32), jacket, V3(0, -0.15, 0))
+            p(elbow, Geo.sphere(0.055, segments: 14), skin, V3(0, -0.33, 0)).simdScale = V3(0.8, 1.1, 1)
+            spinners.append(shoulder); spinners.append(elbow)
+        }
+        // head: side parting with the lock across the forehead, toothbrush moustache, glowing eyes
+        _ = p(body, Geo.cyl(0.055, 0.1, segments: 14), skin, V3(0, 1.6, 0))
+        let head = joint(body, V3(0, 1.6, 0))
+        p(head, Geo.sphere(0.115, segments: 24), skin, V3(0, 0.12, 0)).simdScale = V3(0.95, 1.12, 1.02)
+        p(head, Geo.sphere(0.118, segments: 24), hair, V3(0, 0.155, -0.014)).simdScale = V3(1.0, 0.82, 1.06)
+        // the lock combed across the forehead, lying flat against it
+        _ = p(head, Geo.box(0.12, 0.024, 0.026, chamfer: 0.01), hair, V3(-0.03, 0.176, 0.098), rot: V3(0.3, 0, -0.5))
+        _ = p(head, Geo.box(0.07, 0.03, 0.03, chamfer: 0.01), hair, V3(0.035, 0.205, 0.085), rot: V3(0.4, 0, -0.2))
+        for sd in [Float(-1), 1] {
+            _ = p(head, Geo.sphere(0.014, segments: 10), eye, V3(sd * 0.038, 0.135, 0.103), shadow: false)
+            _ = p(head, Geo.box(0.045, 0.011, 0.012), hair, V3(sd * 0.04, 0.158, 0.106), rot: V3(0, 0, sd * 0.18), shadow: false)
+            p(head, Geo.sphere(0.025, segments: 10), skin, V3(sd * 0.112, 0.12, 0)).simdScale = V3(0.5, 1, 0.8)
+            let g = Geo.glowSprite(0.12, V3(1.0, 0.15, 0.08), 0.9)
+            g.simdPosition = V3(sd * 0.038, 0.135, 0.11)
+            head.addChildNode(g)
+        }
+        _ = p(head, Geo.box(0.026, 0.05, 0.03, chamfer: 0.008), skin, V3(0, 0.108, 0.117), shadow: false)
+        _ = p(head, Geo.box(0.05, 0.022, 0.02, chamfer: 0.004), hair, V3(0, 0.074, 0.112), shadow: false)
+        spinners.append(head)
+
+        hits = [HitSphere(offset: V3(0, 0.55 * k, 0), r: 0.3 * k, crit: false),
+                HitSphere(offset: V3(0, 1.25 * k, 0), r: 0.3 * k, crit: false),
+                HitSphere(offset: V3(0, 1.73 * k, 0.03 * k), r: 0.14 * k, crit: true)]
+        // hands (arms raised forward), eyes
+        muzzles = [V3(-0.27 * k, 1.44 * k, 0.68 * k), V3(0.27 * k, 1.44 * k, 0.68 * k),
+                   V3(-0.04 * k, 1.735 * k, 0.12 * k), V3(0.04 * k, 1.735 * k, 0.12 * k)]
     }
 
     func setFlash(_ on: Bool) {

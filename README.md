@@ -20,11 +20,23 @@ alles (Texturen, Modelle, Skybox, Sounds, Musik) wird beim Start prozedural erze
 | R | Nachladen |
 | 1–4 / Mausrad | Waffe wechseln |
 | ESC | Pause |
+| Q (in Pause / Game Over) | Zurück zum Hauptmenü |
 | F | Vollbild an/aus |
 | M | Musik an/aus |
 | ⌘Q | Beenden |
 
-Wellen-Survival: Gegner kommen durch die vier roten Portale, alle 5 Wellen ein Boss (Overseer).
+Wellen-Survival: Gegner kommen durch die vier roten Portale, alle 5 Wellen ein Boss (Overseer). In Welle 15 wartet stattdessen der Endgegner: ein 8,5 m großer Hitler, der stampft (Schockwelle – springen!), Raketen aus den Händen und Laser aus den Augen schießt und Verstärkung ruft. Schwachpunkt ist der Kopf (nur Mac-Version).
+
+![Hauptmenü](docs/screenshot-menu.png)
+
+Im Hauptmenü wählst du die Map (Pfeiltasten ← →, Tasten 1/2 oder Klick auf eine Karte, dann STARTEN oder Enter). Jede Map hat ihren eigenen Rekord.
+
+| Map | Beschreibung |
+|---|---|
+| Station Helix-9 | Geschlossene Neon-Arena im Inneren der Station: Säulen, Container, Reaktorkern in der Mitte |
+| Orbital-Dock | Offene Andockplattform unter dem Gasriesen: erhöhte Plattform mit Kontrollturm, vier Landepads, Portalkräne mit hängenden Containern, Kraftfeld als Rand (nur Mac-Version) |
+
+![Orbital-Dock](docs/screenshot-dock.png)
 Schild lädt sich nach 4 Sekunden ohne Treffer wieder auf, Vital nur über grüne Pickups.
 Kopf-/Kerntreffer machen doppelten Schaden. Rollminen explodieren und reißen andere Gegner mit.
 
@@ -80,7 +92,9 @@ Testmodi der Binary (ohne Eingabe, mit Autopilot):
 | `Sources/Game.swift` | Spielzustand, Spieler, Kamera, Wellen, Autopilot |
 | `Sources/Combat.swift` | Waffen, Schaden, Projektile, Pickups, Gegner-KI |
 | `Sources/Enemies.swift` | Gegnertypen und ihre Modelle |
-| `Sources/Level.swift` | Arena, Kollision, Wegfindung (Flow-Field) |
+| `Sources/Maps.swift` | Map-Liste (Name, Beschreibung, Farbe, Rekord-Schlüssel) |
+| `Sources/Level.swift` | Arena Helix-9, Kollision, Wegfindung (Flow-Field) |
+| `Sources/LevelDock.swift` | Map Orbital-Dock |
 | `Sources/Textures.swift` | prozedurale PBR-Texturen und Skybox |
 | `Sources/Effects.swift` | Partikel, Tracer, Explosionen, Lichtblitze |
 | `Sources/HUD.swift` | HUD und Menüs (SpriteKit-Overlay) |

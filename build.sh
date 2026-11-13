@@ -6,7 +6,7 @@ cd "$(dirname "$0")"
 
 APP="dist/NOVA BREACH.app"
 BIN="$APP/Contents/MacOS/NovaBreach"
-rm -rf dist build
+rm -rf "$APP" dist/NovaBreach.dmg build   # only the Mac outputs: dist/windows stays
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" build/icon.iconset build/dmg
 
 echo "==> Kompiliere"

@@ -15,6 +15,9 @@ struct Gate {
 final class Nav {
     static let n = 64
     static let origin: Float = -32
+    /// highest ledge an agent can walk up – must match the 0.55 m step in moveGround, or the flow field
+    /// leads enemies into stair sides they cannot climb
+    static let maxStep: Float = 0.55
     var height = [Float](repeating: 0, count: n * n)
     var blocked = [Bool](repeating: false, count: n * n)
     var dist = [Int32](repeating: Int32.max, count: n * n)
@@ -44,7 +47,7 @@ final class Nav {
     }
 
     @inline(__always) private func passable(_ a: Int, _ b: Int) -> Bool {
-        !blocked[b] && abs(height[a] - height[b]) <= 0.85
+        !blocked[b] && abs(height[a] - height[b]) <= Nav.maxStep
     }
 
     func rebuild(target: V3) {
@@ -101,9 +104,9 @@ final class Nav {
                     // no corner cutting
                     let a = cz * n + nx, b = nz * n + cx
                     if dist[a] == Int32.max || dist[b] == Int32.max { continue }
-                    if abs(height[a] - height[i]) > 0.85 || abs(height[b] - height[i]) > 0.85 { continue }
+                    if abs(height[a] - height[i]) > Nav.maxStep || abs(height[b] - height[i]) > Nav.maxStep { continue }
                 }
-                if here != Int32.max && !blocked[i] && abs(height[j] - height[i]) > 0.85 { continue }
+                if here != Int32.max && !blocked[i] && abs(height[j] - height[i]) > Nav.maxStep { continue }
                 let wx = Nav.origin + Float(nx) + 0.5, wz = Nav.origin + Float(nz) + 0.5
                 let score = Float(dist[j]) + 0.02 * simd_length(V2(target.x - wx, target.z - wz))
                 if score < best { best = score; bestDir = V2(wx - pos.x, wz - pos.z) }
@@ -126,13 +129,39 @@ final class Level {
     let sunNode = SCNNode()
     let coreLight = SCNNode()
 
+    let map: MapID
+    /// playable half extent (players and enemies are clamped to ±bounds)
+    var bounds: Float = Level.half
+    /// shots only hit the floor plane inside ±floorExtent (the dock deck ends, Helix's floor does not)
+    var floorExtent: Float = .greatestFiniteMagnitude
+    var playerStart = V3(0, 0, 16)
+    var playerYaw: Float = 0
+    var menuRadius: Float = 25
+    var menuHeight: Float = 7.5
+    var menuLookY: Float = 3.6
+
     static let cyan = V3(0.25, 0.9, 1.0)
     static let magenta = V3(1.0, 0.2, 0.6)
     static let orange = V3(1.0, 0.5, 0.12)
     static let red = V3(1.0, 0.16, 0.10)
 
-    init(scene: SCNScene) {
+    init(scene: SCNScene, map: MapID) {
+        self.map = map
         scene.rootNode.addChildNode(root)
+        switch map {
+        case .helix: buildHelix(scene)
+        case .dock: buildDock(scene)
+        }
+        nav = Nav(obstacles)
+    }
+
+    /// Takes the whole map out of the scene (switching maps in the menu).
+    func remove() {
+        root.enumerateHierarchy { n, _ in n.removeAllActions(); n.removeAllParticleSystems() }
+        root.removeFromParentNode()
+    }
+
+    private func buildHelix(_ scene: SCNScene) {
         buildSkyAndLights(scene)
         buildFloor()
         buildWalls()
@@ -144,7 +173,6 @@ final class Level {
         buildSkyline()
         buildFloorStrips()
         buildAtmosphere()
-        nav = Nav(obstacles)
         pickupSpots += [V3(20, 1.6, -20), V3(-20, 1.6, 20), V3(0, 0, 18), V3(0, 0, -18), V3(18, 0, 0), V3(-18, 0, 0),
                         V3(-12, 0, -24), V3(12, 0, 24), V3(26, 0, -6), V3(-26, 0, 6)]
     }
@@ -291,29 +319,7 @@ final class Level {
             box(lp.x, lp.z, alongX ? 7.5 : 1.5, alongX ? 1.5 : 7.5, 5.4, 6.6, "pil", Tex.pillar, tile: 1.5, tileV: 4, collide: false, chamfer: 0.06)
             // portal surface
             let pg = Geo.plane(5.0, 5.4)
-            let pm = SCNMaterial()
-            pm.lightingModel = .constant
-            pm.diffuse.contents = Tex.hex
-            pm.diffuse.wrapS = .repeat; pm.diffuse.wrapT = .repeat
-            pm.isDoubleSided = true
-            pm.shaderModifiers = [.surface: """
-            #pragma arguments
-            float u_boost;
-            #pragma body
-            float2 uv = _surface.diffuseTexcoord;
-            float t = scn_frame.time;
-            float2 c = uv - float2(0.5, 0.5);
-            float r = length(c);
-            float a = atan2(c.y, c.x);
-            float swirl = sin(a * 3.0 + r * 18.0 - t * 3.0) * 0.5 + 0.5;
-            float wave = sin(r * 30.0 - t * 5.0) * 0.5 + 0.5;
-            float hexv = _surface.diffuse.r;
-            float3 hot = float3(1.0, 0.25, 0.08);
-            float3 colr = hot * (0.15 + 0.9 * swirl * (1.0 - r) + hexv * (0.6 + 1.0 * wave));
-            colr *= (1.0 + u_boost * 3.0);
-            _surface.diffuse = float4(colr, 1.0);
-            """]
-            pm.setValue(NSNumber(value: 0.0), forKey: "u_boost")
+            let pm = Level.makePortalMaterial()
             pg.materials = [pm]
             portalMaterials.append(pm)
             let pn = SCNNode(geometry: pg)
@@ -660,7 +666,7 @@ final class Level {
                 else if m == b { p.z = o.minZ - radius } else { p.z = o.maxZ + radius }
             }
         }
-        let lim = Level.half - radius
+        let lim = bounds - radius
         p.x = clampf(p.x, -lim, lim); p.z = clampf(p.z, -lim, lim)
     }
 
@@ -679,7 +685,8 @@ final class Level {
         var hit = false
         if d.y < -1e-5 {
             let t = -o.y / d.y
-            if t > 0 && t < best { best = t; bn = V3(0, 1, 0); hit = true }
+            let hx = o.x + d.x * t, hz = o.z + d.z * t
+            if t > 0 && t < best && abs(hx) <= floorExtent && abs(hz) <= floorExtent { best = t; bn = V3(0, 1, 0); hit = true }
         }
         let inv = V3(abs(d.x) > 1e-7 ? 1 / d.x : Float.greatestFiniteMagnitude,
                      abs(d.y) > 1e-7 ? 1 / d.y : Float.greatestFiniteMagnitude,

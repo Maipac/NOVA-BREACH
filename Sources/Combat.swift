@@ -265,7 +265,7 @@ extension Game {
             hud.hit(kill: killed, crit: crit)
             if hitSoundT <= 0 { audio.play(crit ? "crit" : "hit", vol: 0.5); hitSoundT = 0.04 }
         }
-        if e.kind != .boss && e.kind != .brute {
+        if !e.kind.isBoss && e.kind != .brute {
             e.vel += V3(dir.x, 0, dir.z) * min(amount * 0.06, 4)
         }
         if killed { killEnemy(e) }
@@ -283,18 +283,21 @@ extension Game {
         case .roller: size = 4.2
         case .brute: size = 3.4
         case .boss: size = 7
+        case .tyrant: size = 9
         }
         fx.explosion(at: c, radius: size, e.kind == .roller ? V3(1.0, 0.7, 0.2) : mix3(e.kind.glow, V3(1, 0.6, 0.2), 0.5), shakeAmount: min(0.9, size * 0.12))
-        fx.debris(at: c, count: e.kind == .boss ? 26 : (e.kind == .brute ? 12 : 5), material: e.debrisMat, size: e.kind == .boss ? 0.6 : (e.kind == .brute ? 0.4 : 0.2), force: 4 + size * 1.6)
+        fx.debris(at: c, count: e.kind.isBoss ? 28 : (e.kind == .brute ? 12 : 5), material: e.debrisMat, size: e.kind.isBoss ? 0.6 : (e.kind == .brute ? 0.4 : 0.2), force: 4 + size * 1.6)
         audio.play(size > 3 ? "explosion" : "enemyDie", at: c, listener: pos, yaw: yaw, vol: size > 3 ? 1 : 0.8)
 
         if e.kind == .roller {
             // volatile: hurts everything nearby, including other machines
             radialDamage(at: c, radius: 5, damage: 70, playerDamage: 26, exclude: e)
         }
-        if e.kind == .boss {
-            for k in 0..<5 {
-                let o = c + randUnit() * 2.5
+        if e.kind.isBoss {
+            let tyrant = e.kind == .tyrant
+            for k in 0..<(tyrant ? 9 : 5) {
+                // the giant comes apart from the boots up to the head
+                let o = tyrant ? e.pos + V3(frand(-1.5, 1.5), 1 + Float(k) * 0.9, frand(-1.2, 1.2)) : c + randUnit() * 2.5
                 let node = SCNNode()
                 scene.rootNode.addChildNode(node)
                 node.runAction(.sequence([.wait(duration: 0.15 + Double(k) * 0.18), .run { [weak self] _ in
@@ -303,8 +306,9 @@ extension Game {
                 }, .removeFromParentNode()]))
             }
             hud.flash(.white, 0.5, 0.6)
-            hud.announce("OVERSEER ZERSTÖRT", sub: "+\(e.kind.score * comboMult)", color: NSColor(srgbRed: 1, green: 0.8, blue: 0.3, alpha: 1), hold: 2)
-            for _ in 0..<3 { spawnPickup([.health, .ammo, .power].randomElement()!, at: V3(c.x + frand(-3, 3), 0, c.z + frand(-3, 3))) }
+            hud.announce(tyrant ? "HITLER BESIEGT" : "OVERSEER ZERSTÖRT", sub: "+\(e.kind.score * comboMult)", color: NSColor(srgbRed: 1, green: 0.8, blue: 0.3, alpha: 1), hold: tyrant ? 3 : 2)
+            if tyrant { audio.play("waveClear") }
+            for _ in 0..<(tyrant ? 4 : 3) { spawnPickup([.health, .ammo, .power].randomElement()!, at: V3(c.x + frand(-3, 3), 0, c.z + frand(-3, 3))) }
         }
         guard scoreIt else { return }
         kills += 1
@@ -317,7 +321,7 @@ extension Game {
         // drops
         let roll = frand()
         let chance: Float = e.kind == .brute ? 1 : (e.kind == .trooper ? 0.3 : 0.15)
-        if e.kind != .boss && roll < chance {
+        if !e.kind.isBoss && roll < chance {
             let r = frand()
             let hpNeed = hp < 60
             let kind: PickupKind = r < (hpNeed ? 0.6 : 0.35) ? .health : (r < 0.92 ? .ammo : .power)
@@ -565,10 +569,10 @@ extension Game {
         if n > 1 {
             for i in 0..<(n - 1) {
                 let a = enemies[i]
-                if a.kind == .boss { continue }
+                if a.kind.isBoss { continue }
                 for j in (i + 1)..<n {
                     let b = enemies[j]
-                    if b.kind == .boss || a.kind.flies != b.kind.flies { continue }
+                    if b.kind.isBoss || a.kind.flies != b.kind.flies { continue }
                     let dx = b.pos.x - a.pos.x, dz = b.pos.z - a.pos.z
                     let minD = (a.radius + b.radius) * 0.9
                     let d2 = dx * dx + dz * dz
@@ -741,6 +745,8 @@ extension Game {
 
             case .boss:
                 updateBoss(e, dt, toN: toN, tangent: tangent, dist: dist, alive: alive)
+            case .tyrant:
+                updateTyrant(e, dt, toN: toN, dist: dist, alive: alive)
             }
             e.node.simdPosition = e.pos
             e.node.simdEulerAngles = V3(0, e.yaw, 0)
@@ -748,15 +754,151 @@ extension Game {
         enemies.removeAll { $0.dead }
     }
 
+    /// Eases a joint's Euler angles toward a target (smooth switches between walking, aiming and ranting).
+    private func pose(_ n: SCNNode, _ target: V3, _ dt: Float, rate: Float = 8) {
+        n.simdEulerAngles += (target - n.simdEulerAngles) * min(1, dt * rate)
+    }
+
+    /// Wave-15 boss. States: 0 walk, 1 stomp, 2 hand rockets, 3 eye lasers + fist shaking, 4 call reinforcements.
+    private func updateTyrant(_ e: Enemy, _ dt: Float, toN: V2, dist: Float, alive: Bool) {
+        let rage: Float = e.hp < e.maxHp * 0.4 ? 0.7 : 1
+        let k: Float = 4.6
+        var speed: Float = 0
+        var dir = toN
+        e.stateT -= dt
+        if alive && e.stateT <= 0 {
+            if e.state == 0 {
+                // pick the next attack: stomp when close, otherwise cycle through ranged attacks
+                if dist < 9 { e.state = 1; e.stateT = 1.6 * rage }
+                else {
+                    let cycle = [2, 3, 2, 4, 3]
+                    e.state = cycle[e.burst % cycle.count]; e.burst += 1
+                    e.stateT = e.state == 4 ? 1.2 : 3.0
+                }
+                e.burstT = 0.4
+                e.side = 0
+            } else {
+                e.state = 0; e.stateT = frand(2.0, 3.2) * rage
+            }
+        }
+        if alive && e.state == 0 && dist < 5.5 { e.state = 1; e.stateT = 1.6 * rage; e.side = 0 }
+
+        let hipL = e.legs[0], kneeL = e.legs[1], hipR = e.legs[2], kneeR = e.legs[3]
+        let shL = e.spinners[0], elL = e.spinners[1], shR = e.spinners[2], elR = e.spinners[3], head = e.spinners[4]
+        switch e.state {
+        case 0:
+            dir = (e.sees && dist < 12) ? toN : level.nav.direction(from: e.pos, toward: pos)
+            speed = dist > 8 ? e.speed / rage : 0
+        case 1: // stomp: lift the right leg, slam it down, shockwave along the floor
+            let total = 1.6 * rage
+            let t = total - e.stateT
+            let lift = t < 0.7 * rage ? sstep(0, 0.7 * rage, t) : max(0, 1 - (t - 0.7 * rage) / 0.12)
+            pose(hipR, V3(-0.9 * lift, 0, 0), dt, rate: 20)
+            pose(kneeR, V3(1.1 * lift, 0, 0), dt, rate: 20)
+            pose(hipL, V3(0, 0, 0), dt); pose(kneeL, V3(0, 0, 0), dt)
+            pose(shL, V3(0, 0, -0.5), dt); pose(shR, V3(0, 0, 0.5), dt)
+            if e.side == 0 && t >= 0.7 * rage + 0.1 {
+                e.side = 1
+                let foot = e.world(V3(0.11 * k, 0.2, 0.25 * k))
+                fx.explosion(at: foot, radius: 2.6, V3(1.0, 0.45, 0.12), shakeAmount: 0.85)
+                fx.spawnFlash(at: V3(foot.x, e.pos.y, foot.z), e.kind.glow)
+                audio.play("explosion", at: foot, listener: pos, yaw: yaw, vol: 1)
+                let d = simd_length(V2(pos.x - foot.x, pos.z - foot.z))
+                // jumping over the shockwave avoids it
+                if alive && d < 9 && onGround && abs(pos.y - e.pos.y) < 0.8 {
+                    hurtPlayer(14 + 22 * (1 - d / 9), from: foot)
+                    let away = d > 0.01 ? V2(pos.x - foot.x, pos.z - foot.z) / d : toN
+                    vel += V3(away.x, 0, away.y) * 9 + V3(0, 5, 0)
+                    onGround = false
+                }
+            }
+        case 2: // rockets from both raised hands
+            pose(shL, V3(-1.45, 0, 0), dt); pose(shR, V3(-1.45, 0, 0), dt)
+            pose(elL, V3(0, 0, 0), dt); pose(elR, V3(0, 0, 0), dt)
+            speed = dist > 16 ? e.speed * 0.5 : 0
+            e.burstT -= dt
+            if alive && e.sees && e.burstT <= 0 {
+                e.burstT = 0.55 * rage
+                e.side = 1 - e.side
+                enemyShoot(e, muzzle: e.muzzles[e.side], speed: 16, damage: 24, inaccuracy: 0.03, splash: 3.6, lead: 0.5)
+            }
+        case 3: // eye lasers while shaking a fist
+            pose(shR, V3(-2.5, 0, 0.25), dt)
+            pose(elR, V3(-0.9 + sin(e.anim * 14) * 0.35, 0, 0), dt, rate: 14)
+            pose(shL, V3(-0.3, 0, -0.15), dt); pose(elL, V3(-0.5, 0, 0), dt)
+            e.burstT -= dt
+            if alive && e.sees && e.burstT <= 0 {
+                e.burstT = 0.08 * rage
+                e.side = 1 - e.side
+                enemyShoot(e, muzzle: e.muzzles[2 + e.side], speed: 42, damage: 5, inaccuracy: 0.025)
+            }
+        default: // reinforcements
+            pose(shR, V3(-2.7, 0, 0.1), dt); pose(elR, V3(0, 0, 0), dt)
+            if e.side == 0 {
+                e.side = 1
+                if alive && enemies.count < 16 {
+                    for k in [EnemyKind.trooper, .trooper, .skitter, .skitter] { spawnEnemy(k) }
+                    hud.feedLine("HITLER ruft Verstärkung", NSColor(srgbRed: 1, green: 0.4, blue: 0.3, alpha: 1))
+                    audio.play("wave", vol: 0.8)
+                }
+            }
+        }
+
+        // walking: own movement with a wider collision radius than moveGround (the giant should not wade through cover)
+        let desired = V3(dir.x, 0, dir.y) * speed
+        let kk = min(1, dt * 4)
+        e.vel.x += (desired.x - e.vel.x) * kk
+        e.vel.z += (desired.z - e.vel.z) * kk
+        var p = V3(e.pos.x + e.vel.x * dt, e.pos.y, e.pos.z + e.vel.z * dt)
+        level.resolve(&p, radius: 1.0, feetY: e.pos.y, height: e.height, step: 0.55)
+        let g = level.groundHeight(p.x, p.z, radius: 0.3, feetY: e.pos.y, step: 0.55)
+        p.y = g > e.pos.y ? min(g, e.pos.y + dt * 4) : max(g, e.pos.y - dt * 10)
+        e.pos = p
+        faceToward(e, e.state == 0 && dist > 12 ? dir : toN, dt, rate: 2.2)
+
+        let sp = len2(e.vel)
+        let ph = e.anim * 2.4
+        let amp = min(1, sp / 1.5) * 0.38
+        if e.state != 1 {
+            pose(hipL, V3(sin(ph) * amp, 0, 0), dt, rate: 12)
+            pose(kneeL, V3(max(0, -cos(ph)) * amp * 1.3, 0, 0), dt, rate: 12)
+            pose(hipR, V3(-sin(ph) * amp, 0, 0), dt, rate: 12)
+            pose(kneeR, V3(max(0, cos(ph)) * amp * 1.3, 0, 0), dt, rate: 12)
+        }
+        if e.state == 0 {
+            pose(shL, V3(-sin(ph) * amp * 0.9, 0, -0.08), dt); pose(shR, V3(sin(ph) * amp * 0.9, 0, 0.08), dt)
+            pose(elL, V3(-0.25, 0, 0), dt); pose(elR, V3(-0.25, 0, 0), dt)
+        }
+        e.model.simdPosition = V3(0, abs(sin(ph)) * 0.18 * amp, 0)
+        // head looks down at the player
+        let lookDown = atan2(e.pos.y + 1.73 * k - (pos.y + eyeY), max(dist, 1))
+        pose(head, V3(clampf(lookDown, -0.2, 0.6), 0, 0), dt, rate: 5)
+        // footsteps shake the arena
+        let s: Float = sin(ph) >= 0 ? 1 : -1
+        if amp > 0.1 && s != e.stepSign {
+            e.stepSign = s
+            if dist < 25 { fx.shake(0.07 * (1 - dist / 25) + 0.02) }
+            audio.play("land", at: e.pos, listener: pos, yaw: yaw, vol: 1)
+        }
+    }
+
     private func updateBoss(_ e: Enemy, _ dt: Float, toN: V2, tangent: V2, dist: Float, alive: Bool) {
         // hover around the player at mid range
         var want = tangent * e.strafe * 0.7
         if dist > 20 { want += toN } else if dist < 12 { want -= toN }
-        let targetY: Float = 5.6 + sin(e.anim * 0.8) * 0.7
+        // hover relative to the player, so a raised platform (Orbital-Dock hub) never puts the camera inside the boss
+        let targetY: Float = max(5.6, pos.y + 5.2) + sin(e.anim * 0.8) * 0.7
         let desired = V3(want.x * e.speed, (targetY - e.pos.y) * 2, want.y * e.speed)
         e.vel += (desired - e.vel) * min(1, dt * 1.5)
         var p = e.pos + e.vel * dt
         level.resolve(&p, radius: 2.4, feetY: p.y - 2, height: 4, step: 0)
+        // never closer than 4.5 m horizontally while its body overlaps the player's height
+        let off = V2(p.x - pos.x, p.z - pos.z)
+        let hd = simd_length(off)
+        if hd < 4.5 && p.y - 2.3 < pos.y + 2.2 {
+            let n = hd > 1e-3 ? off / hd : V2(1, 0)
+            p.x = pos.x + n.x * 4.5; p.z = pos.z + n.y * 4.5
+        }
         e.pos = p
         faceToward(e, toN, dt, rate: 2.5)
         for (i, s) in e.spinners.enumerated() {

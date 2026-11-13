@@ -9,6 +9,7 @@ enum Key {
     static let a: UInt16 = 0, s: UInt16 = 1, d: UInt16 = 2, f: UInt16 = 3, q: UInt16 = 12, w: UInt16 = 13
     static let e: UInt16 = 14, r: UInt16 = 15, n1: UInt16 = 18, n2: UInt16 = 19, n3: UInt16 = 20, n4: UInt16 = 21
     static let ret: UInt16 = 36, m: UInt16 = 46, space: UInt16 = 49, esc: UInt16 = 53, shift: UInt16 = 56
+    static let left: UInt16 = 123, right: UInt16 = 124
 }
 
 struct InputFrame {
@@ -17,6 +18,8 @@ struct InputFrame {
     var dx: Float = 0, dy: Float = 0
     var fire = false, clicked = false
     var scroll: Float = 0
+    /// where the last click landed, in view coordinates (origin bottom-left, like the HUD scene)
+    var click: CGPoint? = nil
     func down(_ k: UInt16) -> Bool { keys.contains(k) }
     func hit(_ k: UInt16) -> Bool { pressed.contains(k) }
 }
@@ -34,7 +37,9 @@ final class Input {
         }
     }
     func mouse(_ x: Float, _ y: Float) { lock.lock(); f.dx += x; f.dy += y; lock.unlock() }
-    func button(_ down: Bool) { lock.lock(); f.fire = down; if down { f.clicked = true }; lock.unlock() }
+    func button(_ down: Bool, at p: CGPoint? = nil) {
+        lock.lock(); f.fire = down; if down { f.clicked = true; f.click = p }; lock.unlock()
+    }
     func scroll(_ v: Float) { lock.lock(); f.scroll += v; lock.unlock() }
     func releaseAll() { lock.lock(); f.keys.removeAll(); f.fire = false; lock.unlock() }
     /// Returns the accumulated state and resets the one-shot parts.
@@ -42,7 +47,7 @@ final class Input {
         lock.lock(); defer { lock.unlock() }
         let out = f
         f.pressed.removeAll(keepingCapacity: true)
-        f.dx = 0; f.dy = 0; f.clicked = false; f.scroll = 0
+        f.dx = 0; f.dy = 0; f.clicked = false; f.scroll = 0; f.click = nil
         return out
     }
 }
@@ -116,7 +121,9 @@ enum Phase { case menu, playing, paused, dead }
 
 final class Game: NSObject, SCNSceneRendererDelegate {
     let scene = SCNScene()
-    let level: Level
+    var level: Level
+    /// selected map, remembered between launches
+    var mapID: MapID = MapID(rawValue: UserDefaults.standard.integer(forKey: "map")) ?? .helix
     let fx: Effects
     let hud: HUD
     let audio: Audio
@@ -210,7 +217,7 @@ final class Game: NSObject, SCNSceneRendererDelegate {
 
     init(viewSize: CGSize, audioEnabled: Bool) {
         Tex.preload()
-        level = Level(scene: scene)
+        level = Level(scene: scene, map: mapID)
         fx = Effects(scene: scene)
         hud = HUD(size: viewSize)
         audio = Audio(enabled: audioEnabled)
@@ -219,8 +226,7 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         buildWeapons()
         setupTrail()
         scene.physicsWorld.gravity = SCNVector3(0, -16, 0)
-        let d = UserDefaults.standard
-        hud.showMenu(best: d.integer(forKey: "bestScore"), bestWave: d.integer(forKey: "bestWave"))
+        showMainMenu()
         weaponRoot.isHidden = true
         updateMenuCamera(0)
     }
@@ -295,8 +301,23 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         case .menu:
             updateMenuCamera(dtReal)
             fx.update(dtReal)
-            if inp.clicked || inp.hit(Key.ret) || inp.hit(Key.space) || autoStart { autoStart = false; startGame() }
+            let n = MapID.allCases.count
+            if inp.hit(Key.left) || inp.hit(Key.a) { setMap(MapID(rawValue: (mapID.rawValue + n - 1) % n)!) }
+            if inp.hit(Key.right) || inp.hit(Key.d) { setMap(MapID(rawValue: (mapID.rawValue + 1) % n)!) }
+            for (i, k) in [Key.n1, Key.n2, Key.n3, Key.n4].enumerated() where inp.hit(k) { if let m = MapID(rawValue: i) { setMap(m) } }
+            var start = inp.hit(Key.ret) || inp.hit(Key.space) || autoStart
+            if let c = inp.click {
+                switch hud.menuHit(c) {
+                case .map(let i)?:
+                    // clicking the selected card starts it, clicking the other one selects it
+                    if i == mapID.rawValue { start = true } else if let m = MapID(rawValue: i) { setMap(m) }
+                case .start?: start = true
+                case nil: break
+                }
+            }
+            if start { autoStart = false; startGame() }
         case .paused:
+            if inp.hit(Key.q) { goToMenu(); return }
             if inp.clicked || inp.hit(Key.esc) || inp.hit(Key.ret) { setPaused(false) }
         case .playing:
             if inp.hit(Key.esc) { setPaused(true); return }
@@ -311,6 +332,7 @@ final class Game: NSObject, SCNSceneRendererDelegate {
             fx.update(dtReal)
             updateDeathCamera(dtReal)
             updateHUD(dtReal)
+            if deadT > 1.4 && inp.hit(Key.q) { goToMenu(); return }
             if deadT > 1.4 && (inp.clicked || inp.hit(Key.ret) || inp.hit(Key.space)) { startGame() }
         }
     }
@@ -327,14 +349,53 @@ final class Game: NSObject, SCNSceneRendererDelegate {
     }
 
 
-    func startGame() {
+    /// Removes everything a round left behind (enemies, shots, pickups, effects).
+    private func clearWorld() {
         for e in enemies { e.node.removeFromParentNode() }
         for p in projectiles { p.node.removeFromParentNode() }
         for p in pickups { p.node.removeFromParentNode() }
         enemies.removeAll(); projectiles.removeAll(); pickups.removeAll()
         fx.clear()
+        for i in 0..<gateBoost.count { gateBoost[i] = 0 }
+        for m in level.portalMaterials { m.setValue(NSNumber(value: 0.0), forKey: "u_boost") }
+    }
+
+    func showMainMenu() {
+        let d = UserDefaults.standard
+        let maps = MapID.allCases.map { (id: $0, best: d.integer(forKey: $0.scoreKey), wave: d.integer(forKey: $0.waveKey)) }
+        hud.showMenu(maps: maps, selected: mapID.rawValue)
+    }
+
+    /// Switches the arena while the main menu is open (the menu camera orbits the selected map).
+    func setMap(_ id: MapID) {
+        guard phase == .menu, id != mapID else { return }
+        level.remove()
+        level = Level(scene: scene, map: id)
+        mapID = id
+        if !demo { UserDefaults.standard.set(id.rawValue, forKey: "map") }
+        gateBoost = Array(repeating: 0, count: level.gates.count)
+        navT = 0
+        showMainMenu()
+        audio.play("swap", vol: 0.8)
+    }
+
+    func goToMenu() {
+        clearWorld()
+        phase = .menu
+        scene.isPaused = false
+        weaponRoot.isHidden = true
         hud.resetTransient()
-        pos = V3(0, 0, 16); vel = V3(0, 0, 0); yaw = 0; pitch = 0
+        showMainMenu()
+        audio.play("ui")
+        audio.musicVolume = 0.42
+        input.releaseAll()
+        DispatchQueue.main.async { self.onCapture?(false) }
+    }
+
+    func startGame() {
+        clearWorld()
+        hud.resetTransient()
+        pos = level.playerStart; vel = V3(0, 0, 0); yaw = level.playerYaw; pitch = 0
         hp = 100; shield = 100; sinceHurt = 10; onGround = true
         dashCD = 0; dashT = 0; overcharge = 0; eyeY = 1.7; deadT = 0
         for w in weapons { w.reset(); w.node.isHidden = true }
@@ -364,12 +425,12 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         fx.shake(1)
         hud.flash(NSColor(srgbRed: 1, green: 0.1, blue: 0.05, alpha: 1), 0.6, 0.8)
         let d = UserDefaults.standard
-        let best = d.integer(forKey: "bestScore")
+        let best = d.integer(forKey: mapID.scoreKey)
         let newBest = score > best
-        if newBest { d.set(score, forKey: "bestScore") }
-        if wave > d.integer(forKey: "bestWave") { d.set(wave, forKey: "bestWave") }
+        if newBest && !demo { d.set(score, forKey: mapID.scoreKey) }
+        if wave > d.integer(forKey: mapID.waveKey) && !demo { d.set(wave, forKey: mapID.waveKey) }
         let acc = shotsFired > 0 ? Int(Float(shotsHit) / Float(shotsFired) * 100) : 0
-        hud.showGameOver(GameOverStats(score: score, wave: wave, kills: kills, accuracy: min(acc, 100), best: max(best, score), newBest: newBest, time: Int(timeAlive)))
+        hud.showGameOver(GameOverStats(score: score, wave: wave, kills: kills, accuracy: min(acc, 100), best: max(best, score), newBest: newBest, time: Int(timeAlive), mapName: mapID.name))
         DispatchQueue.main.async { self.onCapture?(false) }
     }
 
@@ -377,9 +438,9 @@ final class Game: NSObject, SCNSceneRendererDelegate {
 
     func updateMenuCamera(_ dt: Float) {
         menuAngle += dt * 0.09
-        let r: Float = 25
-        camNode.simdPosition = V3(cos(menuAngle) * r, 7.5 + sin(menuAngle * 0.7) * 1.5, sin(menuAngle) * r)
-        camNode.simdLook(at: V3(0, 3.6, 0))
+        let r = level.menuRadius
+        camNode.simdPosition = V3(cos(menuAngle) * r, level.menuHeight + sin(menuAngle * 0.7) * 1.5, sin(menuAngle) * r)
+        camNode.simdLook(at: V3(0, level.menuLookY, 0))
         camera.fieldOfView = 62
     }
 
@@ -417,7 +478,7 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         updateEnemies(dt)
         updateProjectiles(dt)
         updatePickups(dt)
-        for i in 0..<gateBoost.count where gateBoost[i] > 0 {
+        for i in 0..<min(gateBoost.count, level.portalMaterials.count) where gateBoost[i] > 0 {
             gateBoost[i] = max(0, gateBoost[i] - dt * 1.5)
             level.portalMaterials[i].setValue(NSNumber(value: gateBoost[i]), forKey: "u_boost")
         }
@@ -554,17 +615,17 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         for e in enemies where !e.dead {
             let dx = e.pos.x - pos.x, dz = e.pos.z - pos.z
             // rotate into view space: +y on the radar = forward
-            pts.append((V2(dx * cy - dz * sy, -(dx * sy + dz * cy)), e.kind == .boss))
+            pts.append((V2(dx * cy - dz * sy, -(dx * sy + dz * cy)), e.kind.isBoss))
         }
         hud.setRadar(pts, range: 34)
-        let boss = enemies.first { $0.kind == .boss && !$0.dead }
+        let boss = enemies.first { $0.kind.isBoss && !$0.dead }
         hud.update(dt: dt, hp: hp, shield: shield, ammo: w.ammo, reserve: w.def.reserveMax < 0 ? -1 : w.reserve,
                    weaponName: w.def.name, weaponIndex: cur, weaponNames: weapons.map { $0.def.short },
                    weaponUsable: weapons.map { $0.ammo > 0 || $0.reserve != 0 }, weaponColor: w.def.color,
                    spread: w.def.spread * (w.def.pellets > 1 ? 0.5 : 1) + bloom, reloading: reloadT,
                    dash: 1 - dashCD / 2.2, overcharge: overcharge, score: score, combo: comboMult, comboT: comboT,
                    wave: max(wave, 1), enemiesLeft: spawnQueue.count + enemies.filter { !$0.dead }.count,
-                   bossName: boss.map { _ in "OVERSEER  MK \(bossCount)" }, bossHp: boss.map { $0.hp / $0.maxHp } ?? 0)
+                   bossName: boss.map { $0.kind == .tyrant ? "HITLER" : "OVERSEER  MK \(bossCount)" }, bossHp: boss.map { $0.hp / $0.maxHp } ?? 0)
     }
 
     var comboMult: Int { min(1 + combo / 4, 8) }
@@ -649,10 +710,13 @@ final class Game: NSObject, SCNSceneRendererDelegate {
             q.append(k); budget -= k.cost
         }
         q.shuffle()
-        if isBoss { q.insert(.boss, at: 0); bossCount += 1 }
+        // wave 15: the giant instead of the Overseer (the Overseer keeps counting MK 1, 2, 3 …)
+        let tyrantWave = wave == 15
+        if isBoss { if tyrantWave { q.insert(.tyrant, at: 0) } else { q.insert(.boss, at: 0); bossCount += 1 } }
         spawnQueue = q
         if isBoss {
-            hud.announce("WARNUNG", sub: "OVERSEER nähert sich", color: NSColor(srgbRed: 1, green: 0.2, blue: 0.15, alpha: 1), hold: 2.4)
+            hud.announce(tyrantWave ? "ENDGEGNER" : "WARNUNG", sub: tyrantWave ? "HITLER betritt die Arena" : "OVERSEER nähert sich",
+                         color: NSColor(srgbRed: 1, green: 0.2, blue: 0.15, alpha: 1), hold: tyrantWave ? 3 : 2.4)
             audio.play("boss")
         } else {
             hud.announce("WELLE \(wave)", sub: "\(q.count) Feindkontakte", hold: 1.5)
@@ -670,6 +734,7 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         if forced == nil {
             if kind == .drone { p.y = 3.2 }
             if kind == .boss { p = gate.pos + gate.dir * 7; p.y = 6.5 }
+            if kind == .tyrant { p = gate.pos + gate.dir * 3; p.y = 0 }
             gateBoost[gi] = 1
         }
         let hpScale = 1 + Float(wave - 1) * 0.07 + (kind == .boss ? Float(bossCount - 1) * 0.45 : 0)

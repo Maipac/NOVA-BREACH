@@ -18,7 +18,7 @@ final class GameView: SCNView {
     }
     override func keyUp(with e: NSEvent) { input.key(e.keyCode, false) }
     override func flagsChanged(with e: NSEvent) { input.key(Key.shift, e.modifierFlags.contains(.shift)) }
-    override func mouseDown(with e: NSEvent) { input.button(true) }
+    override func mouseDown(with e: NSEvent) { input.button(true, at: convert(e.locationInWindow, from: nil)) }
     override func mouseUp(with e: NSEvent) { input.button(false) }
     override func rightMouseDown(with e: NSEvent) {}
     override func mouseMoved(with e: NSEvent) { if captured { input.mouse(Float(e.deltaX), Float(e.deltaY)) } }
@@ -79,7 +79,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             game.onCapture = { _ in }
             let startWave = Int(argValue("--wave") ?? "1") ?? 1
             let at = Double(argValue("--at") ?? "11") ?? 11
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in self?.game.autoStart = true }
+            if let m = MapID.fromArg(argValue("--map")) { game.setMap(m) }
+            if args.contains("--menutest") {
+                // drives the main menu with real input (no autopilot) and reports what happened
+                game.demo = false
+                let savedMap = UserDefaults.standard.object(forKey: "map")
+                let g = game!, v = view!
+                func cardPoint(_ i: Int, _ y: CGFloat) -> CGPoint {
+                    let b = v.bounds, s = max(0.6, min(b.height / 900, b.width / 1440))
+                    return CGPoint(x: b.midX + CGFloat(i) * s, y: b.midY + y * s)
+                }
+                func click(_ p: CGPoint) { g.input.button(true, at: p); DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { g.input.button(false) } }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                    print("menutest start map \(g.mapID.name) phase \(g.phase)")
+                    g.input.key(Key.right, true); g.input.key(Key.right, false)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3.5) {
+                    print("menutest after right-arrow map \(g.mapID.name)")
+                    click(cardPoint(-200, 70))
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 4.5) {
+                    print("menutest after clicking left card map \(g.mapID.name)")
+                    click(cardPoint(0, -80))
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) {
+                    print("menutest after clicking STARTEN phase \(g.phase) map \(g.mapID.name) pos \(g.pos)")
+                    g.input.key(Key.esc, true); g.input.key(Key.esc, false)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 6.6) {
+                    print("menutest after esc phase \(g.phase)")
+                    g.input.key(Key.q, true); g.input.key(Key.q, false)
+                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 7.3) {
+                    print("menutest after q phase \(g.phase) map \(g.mapID.name)")
+                    if let m = savedMap { UserDefaults.standard.set(m, forKey: "map") } else { UserDefaults.standard.removeObject(forKey: "map") }
+                }
+            } else if !args.contains("--menu") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in self?.game.autoStart = true }
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in if startWave > 1 { self?.game.wave = startWave - 1 } }
             DispatchQueue.main.asyncAfter(deadline: .now() + at) { [weak self] in
                 guard let self = self else { return }
@@ -160,6 +197,7 @@ func runHeadless(dir: String, startWave: Int, seconds: Double, every: Double) {
     let game = Game(viewSize: size, audioEnabled: false)
     game.demo = true
     game.demoMortal = CommandLine.arguments.contains("--mortal")
+    if let m = MapID.fromArg(argValue("--map")) { game.setMap(m) }
     let renderer = SCNRenderer(device: MTLCreateSystemDefaultDevice(), options: nil)
     renderer.scene = game.scene
     renderer.pointOfView = game.camNode
@@ -189,6 +227,16 @@ func runHeadless(dir: String, startWave: Int, seconds: Double, every: Double) {
         }
     }
     print("phase \(game.phase) hp \(Int(game.hp))")
+    if CommandLine.arguments.contains("--debugpos") {
+        print(String(format: "player %.1f %.1f %.1f yaw %.2f", game.pos.x, game.pos.y, game.pos.z, game.yaw))
+        for e in game.enemies {
+            print(String(format: "  %@ %.1f %.1f %.1f sees %d spawnT %.2f hp %.0f/%.0f", e.kind.displayName, e.pos.x, e.pos.y, e.pos.z, e.sees ? 1 : 0, e.spawnT, e.hp, e.maxHp))
+            let nav = game.level.nav!
+            let (cx, cz) = nav.cell(e.pos.x, e.pos.z)
+            let dir = nav.direction(from: e.pos, toward: game.pos)
+            print(String(format: "     cell %d,%d dist %d h %.1f blocked %d dir %.2f %.2f", cx, cz, nav.dist[cz * Nav.n + cx], nav.height[cz * Nav.n + cx], nav.blocked[cz * Nav.n + cx] ? 1 : 0, dir.x, dir.y))
+        }
+    }
     print("headless ok: wave \(game.wave) score \(game.score) kills \(game.kills) enemies \(game.enemies.count) sim \(seconds)s in \(String(format: "%.1f", Date().timeIntervalSince(wall)))s")
 }
 
@@ -203,7 +251,7 @@ func runLineup(dir: String) {
     game.scene.rootNode.addChildNode(camNode)
     renderer.pointOfView = camNode
     var x: Float = 1.5
-    for k in EnemyKind.allCases {
+    for k in EnemyKind.allCases where k != .tyrant {
         let e = Enemy(kind: k, pos: V3(x, k == .drone ? 1.6 : (k == .boss ? 4.4 : 0), k == .boss ? 12 : 16), hpScale: 1)
         e.node.simdScale = V3(1, 1, 1)
         e.node.simdEulerAngles = V3(0, 0.45, 0)
@@ -214,6 +262,14 @@ func runLineup(dir: String) {
         camNode.simdPosition = pos; camNode.simdLook(at: look); game.camera.fieldOfView = fov
         savePNG(renderer.snapshot(atTime: 1, with: size, antialiasingMode: .multisampling4X), "\(dir)/\(name).png")
     }
+    // the wave-15 giant on its own
+    let t = Enemy(kind: .tyrant, pos: V3(0, 0, 4), hpScale: 1)
+    t.node.simdScale = V3(1, 1, 1)
+    t.node.simdEulerAngles = V3(0, 0.2, 0)
+    game.scene.rootNode.addChildNode(t.node)
+    shot("tyrant_front", V3(2, 4.2, 20), V3(0, 4.6, 4), fov: 55)
+    shot("tyrant_head", V3(1.2, 8.2, 9.5), V3(0, 7.9, 4), fov: 45)
+    t.node.removeFromParentNode()
     shot("lineup_small", V3(5.0, 1.5, 21.5), V3(5.4, 1.0, 16), fov: 55)
     shot("lineup_big", V3(12, 3.0, 26), V3(12.5, 2.8, 14), fov: 55)
     shot("sky", V3(0, 1.7, 20), V3(-18, 16, -10), fov: 70)

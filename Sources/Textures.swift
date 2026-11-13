@@ -120,6 +120,29 @@ enum Tex {
     static let crateGrey = buildTextureSet(size: 512, bump: 5, emission: false) { crateTexel($0, $1, V3(0.32, 0.34, 0.37)) }
     static let plating = buildTextureSet(size: 512, bump: 4, emission: false, platingTexel)
     static let tech = buildTextureSet(size: 512, bump: 5, emission: true, techTexel)
+    static let deck = buildTextureSet(size: 1024, bump: 4, emission: false, deckTexel)
+
+    /// landing pad marking (additive decal): outer ring, dashed inner ring, centre cross, corner ticks
+    static let padMark = proceduralImage(512, 512) { u, v in
+        let p = V2(u - 0.5, v - 0.5) * 2
+        let r = simd_length(p)
+        let a = atan2(p.y, p.x)
+        var i: Float = exp(-pow((r - 0.86) / 0.022, 2)) + 0.6 * exp(-pow((r - 0.80) / 0.008, 2))
+        let dash: Float = fract(a / (2 * .pi) * 24) < 0.55 ? 1 : 0
+        i += exp(-pow((r - 0.6) / 0.016, 2)) * dash * 0.8
+        let cross: Float = (abs(p.x) < 0.025 && abs(p.y) < 0.28) || (abs(p.y) < 0.025 && abs(p.x) < 0.28) ? 1 : 0
+        i += cross * 0.9
+        // chevrons pointing at the centre on the four axes
+        for k in 0..<4 {
+            let ang = Float(k) * .pi / 2
+            let dir = V2(cos(ang), sin(ang)), side = V2(-dir.y, dir.x)
+            let along = simd_dot(p, dir), across = abs(simd_dot(p, side))
+            let shape = along - 0.66 - across * 0.9
+            if along > 0.62 && along < 0.78 && across < 0.12 && abs(shape) < 0.03 { i += 1 }
+        }
+        let c = min(i, 1.2)
+        return SIMD4(c, c, c, 1)
+    }
 
     static let glow = proceduralImage(128, 128) { u, v in
         let r = simd_length(V2(u - 0.5, v - 0.5)) * 2
@@ -176,7 +199,7 @@ enum Tex {
     static func preload() {
         let jobs: [() -> Void] = [
             { _ = floor }, { _ = wallCyan }, { _ = pillar }, { _ = crateOrange }, { _ = crateTeal }, { _ = crateGrey },
-            { _ = plating }, { _ = tech }, { _ = sky }, { _ = env },
+            { _ = plating }, { _ = tech }, { _ = deck }, { _ = padMark }, { _ = sky }, { _ = env },
             { _ = glow; _ = softDot; _ = ring; _ = flare; _ = smoke; _ = shaft; _ = hex; _ = scan },
         ]
         DispatchQueue.concurrentPerform(iterations: jobs.count) { jobs[$0]() }
@@ -378,6 +401,54 @@ enum Tex {
         t.col = V3(repeating: 0.55 + 0.4 * n) * (0.5 + 0.5 * seam)
         t.rough = 0.25 + 0.35 * n
         t.metal = 1
+        return t
+    }
+
+    /// Orbital-Dock deck: big 2 m plates, some with diamond tread, hazard bands or painted lines, bolts and grime.
+    static func deckTexel(_ u: Float, _ v: Float) -> Texel {
+        var t = Texel()
+        let gu = u * 2, gv = v * 2
+        let cx = Foundation.floor(gu), cy = Foundation.floor(gv)
+        let fu = gu - cx, fv = gv - cy
+        let ex = min(fu, 1 - fu), ey = min(fv, 1 - fv)
+        let edge = min(ex, ey)
+        let seam = sstep(0.004, 0.014, edge)
+        let id = hashI(Int32(cx), Int32(cy), 23)
+        let n1 = fbm(u, v, 6, 5, 61), n2 = fbm(u, v, 40, 3, 17)
+        var col = V3(0.30, 0.32, 0.35) * (0.82 + 0.36 * n1)
+        var h: Float = 0.3 + 0.5 * seam
+        var rough: Float = 0.36 + 0.3 * n1 + 0.1 * n2
+        var metal: Float = 0.6
+        let inset = sstep(0.06, 0.07, edge)
+        if id < 0.3 {
+            // diamond tread plate
+            let s: Float = 16
+            let a = abs(fract(fu * s) - 0.5), b = abs(fract(fv * s) - 0.5)
+            let alt = (Int(Foundation.floor(fu * s)) + Int(Foundation.floor(fv * s))) & 1
+            let d = alt == 0 ? a * 3 + b : a + b * 3
+            let bump = sstep(0.42, 0.3, d) * inset
+            h += 0.1 * bump
+            col *= 0.9 + 0.1 * bump
+            metal = 0.85
+        } else if id < 0.45 {
+            // hazard band along one edge
+            if fv > 0.03 && fv < 0.13 && ex > 0.03 {
+                col = fract((fu + fv) * 10) < 0.5 ? V3(0.85, 0.6, 0.08) : V3(0.05, 0.05, 0.05)
+                metal = 0.1; rough = 0.55
+            }
+        } else if id > 0.85 {
+            // painted guide line
+            if abs(fu - 0.5) < 0.03 && ey > 0.02 { col = V3(0.85, 0.85, 0.8); metal = 0.1; rough = 0.5 }
+        }
+        let bd = simd_length(V2(ex - 0.045, ey - 0.045))
+        let bolt = sstep(0.016, 0.01, bd)
+        h += 0.15 * bolt
+        col = mix3(col, V3(0.45, 0.46, 0.48), bolt * 0.7)
+        let grime = sstep(0.55, 0.75, fbm(u, v, 10, 4, 99))
+        col = mix3(col, col * 0.55, grime * 0.55)
+        col *= 0.45 + 0.55 * seam
+        rough = mixf(0.85, rough, seam)
+        t.h = h; t.col = col; t.rough = clampf(rough, 0.1, 1); t.metal = metal
         return t
     }
 

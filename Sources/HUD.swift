@@ -62,6 +62,7 @@ private final class Bar {
 
 struct GameOverStats {
     var score: Int, wave: Int, kills: Int, accuracy: Int, best: Int, newBest: Bool, time: Int
+    var mapName: String = ""
 }
 
 final class HUD {
@@ -501,26 +502,93 @@ final class HUD {
         }
     }
 
-    func showMenu(best: Int, bestWave: Int) {
+    enum MenuHit { case map(Int), start }
+
+    /// What the main menu has under a click (view coordinates, origin bottom-left).
+    func menuHit(_ p: CGPoint) -> MenuHit? {
+        for n in scene.nodes(at: p) {
+            var cur: SKNode? = n
+            while let c = cur {
+                if let name = c.name {
+                    if name == "start" { return .start }
+                    if name.hasPrefix("map:"), let i = Int(name.dropFirst(4)) { return .map(i) }
+                }
+                cur = c.parent
+            }
+        }
+        return nil
+    }
+
+    func showMenu(maps: [(id: MapID, best: Int, wave: Int)], selected: Int) {
         clearMenu()
         dim.alpha = 0.45
         gameLayer.alpha = 0
-        title("NOVA BREACH", y: 190, size: 150)
-        let sub = label("A R E N A - P R O T O K O L L   //   S T A T I O N   H E L I X - 9", fontDemi, 22, cCyan)
-        sub.position = CGPoint(x: 0, y: 150)
+        title("NOVA BREACH", y: 250, size: 130)
+        let sub = label("A R E N A - P R O T O K O L L   //   W Ä H L E   D E I N E   M A P", fontDemi, 20, cCyan)
+        sub.position = CGPoint(x: 0, y: 212)
         menuNode.addChild(sub)
         let line = SKShapeNode(rectOf: CGSize(width: 760, height: 2))
-        line.fillColor = cCyan; line.strokeColor = .clear; line.position = CGPoint(x: 0, y: 132)
+        line.fillColor = cCyan; line.strokeColor = .clear; line.position = CGPoint(x: 0, y: 196)
         menuNode.addChild(line)
-        prompt("KLICKEN ODER ENTER ZUM STARTEN", y: 60)
-        controls(y: -20)
-        if best > 0 {
-            let b = label("BESTLEISTUNG   \(formatScore(best)) PUNKTE   ·   WELLE \(bestWave)", fontHeavy, 22, cOrange)
-            b.position = CGPoint(x: 0, y: -230)
-            menuNode.addChild(b)
+
+        let cw: CGFloat = 360, ch: CGFloat = 190
+        let spacing: CGFloat = 400
+        let x0 = -spacing * CGFloat(maps.count - 1) / 2
+        for (i, m) in maps.enumerated() {
+            let sel = i == selected
+            let ac = color(m.id.accent)
+            let card = SKShapeNode(rectOf: CGSize(width: cw, height: ch), cornerRadius: 10)
+            card.name = "map:\(m.id.rawValue)"
+            card.position = CGPoint(x: x0 + CGFloat(i) * spacing, y: 70)
+            card.fillColor = sel ? ac.withAlphaComponent(0.14) : NSColor(white: 0, alpha: 0.5)
+            card.strokeColor = sel ? ac : ac.withAlphaComponent(0.35)
+            card.lineWidth = sel ? 3 : 1.5
+            card.glowWidth = sel ? 4 : 0
+            card.setScale(sel ? 1.04 : 0.96)
+            card.alpha = sel ? 1 : 0.82
+            let num = label("\(m.id.rawValue + 1)", fontMono, 14, cDim, h: .left)
+            num.position = CGPoint(x: -cw / 2 + 18, y: ch / 2 - 30)
+            card.addChild(num)
+            if sel {
+                let tag = label("AUSGEWÄHLT", fontDemi, 14, ac, h: .right)
+                tag.position = CGPoint(x: cw / 2 - 18, y: ch / 2 - 30)
+                card.addChild(tag)
+            }
+            let name = label(m.id.name, fontHeavy, 34, sel ? .white : NSColor(white: 1, alpha: 0.75), h: .left)
+            name.position = CGPoint(x: -cw / 2 + 18, y: ch / 2 - 72)
+            card.addChild(name)
+            let tl = label(m.id.tagline, fontDemi, 15, NSColor(white: 1, alpha: 0.72), h: .left, v: .top)
+            tl.numberOfLines = 0
+            tl.preferredMaxLayoutWidth = cw - 36
+            tl.position = CGPoint(x: -cw / 2 + 18, y: ch / 2 - 86)
+            card.addChild(tl)
+            let rec = m.best > 0 ? "REKORD   \(formatScore(m.best))   ·   WELLE \(m.wave)" : "NOCH KEIN REKORD"
+            let r = label(rec, fontHeavy, 17, m.best > 0 ? cOrange : cDim, h: .left)
+            r.position = CGPoint(x: -cw / 2 + 18, y: -ch / 2 + 22)
+            card.addChild(r)
+            let bar = SKShapeNode(rectOf: CGSize(width: cw - 20, height: 4), cornerRadius: 2)
+            bar.fillColor = sel ? ac : ac.withAlphaComponent(0.3); bar.strokeColor = .clear
+            bar.position = CGPoint(x: 0, y: -ch / 2 + 8)
+            card.addChild(bar)
+            menuNode.addChild(card)
         }
+
+        let ac = color(maps.indices.contains(selected) ? maps[selected].id.accent : V3(0.35, 0.92, 1.0))
+        let btn = SKShapeNode(rectOf: CGSize(width: 320, height: 56), cornerRadius: 8)
+        btn.name = "start"
+        btn.position = CGPoint(x: 0, y: -80)
+        btn.fillColor = ac.withAlphaComponent(0.88); btn.strokeColor = .white; btn.lineWidth = 1.5
+        btn.glowWidth = 3
+        let bl = label("STARTEN", fontHeavy, 30, NSColor(srgbRed: 0.02, green: 0.04, blue: 0.07, alpha: 1), v: .center)
+        btn.addChild(bl)
+        btn.run(.repeatForever(.sequence([.fadeAlpha(to: 0.8, duration: 0.8), .fadeAlpha(to: 1, duration: 0.8)])))
+        menuNode.addChild(btn)
+        let hint = label("← →  oder  1 / 2:  Map wählen    ·    Enter, Leertaste oder Klick:  Starten", fontDemi, 17, cDim)
+        hint.position = CGPoint(x: 0, y: -134)
+        menuNode.addChild(hint)
+        controls(y: -180)
         let foot = label("Überlebe so viele Wellen wie möglich. Alle 5 Wellen wartet ein Boss.", fontDemi, 17, NSColor(white: 1, alpha: 0.6))
-        foot.position = CGPoint(x: 0, y: -270)
+        foot.position = CGPoint(x: 0, y: -360)
         menuNode.addChild(foot)
     }
 
@@ -530,8 +598,11 @@ final class HUD {
         title("PAUSE", y: 120, size: 120)
         prompt("KLICKEN ODER ESC ZUM FORTSETZEN", y: 40)
         controls(y: -30)
+        let back = label("Q  –  ZURÜCK ZUM HAUPTMENÜ", fontHeavy, 19, cCyan)
+        back.position = CGPoint(x: 0, y: -205)
+        menuNode.addChild(back)
         let q = label("⌘Q  –  Spiel beenden", fontDemi, 17, NSColor(white: 1, alpha: 0.6))
-        q.position = CGPoint(x: 0, y: -230)
+        q.position = CGPoint(x: 0, y: -236)
         menuNode.addChild(q)
     }
 
@@ -556,6 +627,14 @@ final class HUD {
         b.position = CGPoint(x: 0, y: -120)
         menuNode.addChild(b)
         prompt("KLICKEN ODER ENTER FÜR NEUEN VERSUCH", y: -190)
+        let back = label("Q  –  HAUPTMENÜ", fontHeavy, 19, cDim)
+        back.position = CGPoint(x: 0, y: -228)
+        menuNode.addChild(back)
+        if !st.mapName.isEmpty {
+            let mn = label(st.mapName, fontDemi, 20, cDim)
+            mn.position = CGPoint(x: 0, y: 128)
+            menuNode.addChild(mn)
+        }
         menuNode.alpha = 0
         menuNode.run(.sequence([.wait(forDuration: 0.5), .fadeIn(withDuration: 0.5)]))
     }
