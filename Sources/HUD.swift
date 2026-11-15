@@ -63,6 +63,8 @@ private final class Bar {
 struct GameOverStats {
     var score: Int, wave: Int, kills: Int, accuracy: Int, best: Int, newBest: Bool, time: Int
     var mapName: String = ""
+    /// cores earned this run, cores in the bank, upgrades taken
+    var cores: Int = 0, totalCores: Int = 0, perks: Int = 0
 }
 
 final class HUD {
@@ -99,6 +101,14 @@ final class HUD {
     private let bossNode = SKNode()
     private let bossBar: Bar
     private let bossLabel = label("", fontHeavy, 20, cRed)
+    private let eventLabel = label("", fontHeavy, 17, cOrange)
+
+    // active ability (E)
+    private let abilityNode = SKNode()
+    private let abilityKey = SKShapeNode(rectOf: CGSize(width: 38, height: 38), cornerRadius: 6)
+    private let abilityName = label("", fontDemi, 16, .white, h: .left)
+    private let abilityStatus = label("", fontDemi, 13, cDim, h: .left)
+    private let abilityBar: Bar
 
     // radar
     private let radar = SKNode()
@@ -135,6 +145,7 @@ final class HUD {
         dashBar = Bar(w: 70, h: 4, slant: 2, color: cCyan)
         comboBar = Bar(w: 120, h: 5, slant: 3, color: cOrange)
         bossBar = Bar(w: 620, h: 14, slant: 8, color: cRed)
+        abilityBar = Bar(w: 130, h: 6, slant: 3, color: cOrange)
 
         // radial edge texture for damage / low health
         func edgeTexture(_ c: NSColor, power: CGFloat) -> SKTexture {
@@ -223,6 +234,18 @@ final class HUD {
         shBar.node.position = CGPoint(x: 5, y: -3)
         for n in [hpTag, hpLabel, shLabel, shTag, hpBar.node, shBar.node] as [SKNode] { bl.addChild(n) }
 
+        // bottom left, next to the bars: ability on E
+        abilityNode.position = CGPoint(x: 350, y: 0)
+        abilityKey.position = CGPoint(x: 19, y: 30)
+        abilityKey.lineWidth = 2
+        let ek = label("E", fontHeavy, 22, .white, v: .center)
+        abilityKey.addChild(ek)
+        abilityName.position = CGPoint(x: 50, y: 36)
+        abilityBar.node.position = CGPoint(x: 50, y: 20)
+        abilityStatus.position = CGPoint(x: 50, y: 0)
+        for n in [abilityKey, abilityName, abilityBar.node, abilityStatus] as [SKNode] { abilityNode.addChild(n) }
+        bl.addChild(abilityNode)
+
         // bottom right: ammo + weapon slots
         ammoLabel.position = CGPoint(x: -84, y: 30)
         reserveLabel.position = CGPoint(x: -76, y: 34)
@@ -244,7 +267,8 @@ final class HUD {
         // top centre: wave / boss
         waveLabel.position = CGPoint(x: 0, y: -44)
         enemiesLabel.position = CGPoint(x: 0, y: -66)
-        tc.addChild(waveLabel); tc.addChild(enemiesLabel)
+        eventLabel.position = CGPoint(x: 0, y: -90)
+        tc.addChild(waveLabel); tc.addChild(enemiesLabel); tc.addChild(eventLabel)
         bossBar.node.position = CGPoint(x: -310, y: -118)
         bossLabel.position = CGPoint(x: 0, y: -98)
         bossNode.addChild(bossBar.node); bossNode.addChild(bossLabel)
@@ -317,13 +341,13 @@ final class HUD {
 
     // MARK: per-frame state
 
-    func update(dt: Float, hp: Float, shield: Float, ammo: Int, reserve: Int, weaponName: String, weaponIndex: Int,
+    func update(dt: Float, hp: Float, hpMax: Float, shield: Float, shieldMax: Float, ammo: Int, reserve: Int, weaponName: String, weaponIndex: Int,
                 weaponNames: [String], weaponUsable: [Bool], weaponColor: V3, spread: Float, reloading: Float,
                 dash: Float, overcharge: Float, score: Int, combo: Int, comboT: Float, wave: Int, enemiesLeft: Int,
                 bossName: String?, bossHp: Float) {
         time += dt
         resizeIfNeeded()
-        hpBar.set(CGFloat(hp / 100)); shBar.set(CGFloat(shield / 100))
+        hpBar.set(CGFloat(hp / max(hpMax, 1))); shBar.set(CGFloat(shield / max(shieldMax, 1)))
         hpLabel.text = "\(Int(hp.rounded(.up)))"
         shLabel.text = "\(Int(shield))"
         let low = hp < 35
@@ -380,6 +404,25 @@ final class HUD {
             dmgLife[i] -= dt
             dmgArcs[i].alpha = CGFloat(max(0, min(1, dmgLife[i] * 1.6)))
         }
+    }
+
+    func setAbility(name: String, charge: Float, status: String, color c: V3) {
+        let ac = color(c)
+        let ready = charge >= 1
+        abilityName.text = name
+        abilityStatus.text = status
+        abilityStatus.fontColor = ready ? ac : cDim
+        abilityBar.setColor(ac)
+        abilityBar.set(CGFloat(charge))
+        abilityKey.strokeColor = ready ? ac : cDim.withAlphaComponent(0.4)
+        abilityKey.fillColor = ready ? ac.withAlphaComponent(0.3 + 0.15 * CGFloat(sin(time * 5))) : NSColor(white: 0, alpha: 0.45)
+        abilityNode.alpha = ready ? 1 : 0.8
+    }
+
+    func setEvent(_ text: String?, color c: V3) {
+        eventLabel.text = text ?? ""
+        eventLabel.fontColor = color(c)
+        if text != nil { eventLabel.alpha = CGFloat(0.75 + 0.25 * sin(time * 4)) }
     }
 
     func formatScore(_ v: Int) -> String {
@@ -487,7 +530,7 @@ final class HUD {
     private func controls(y: CGFloat) {
         let rows: [(String, String)] = [
             ("W A S D", "Bewegen"), ("MAUS", "Zielen"), ("LINKSKLICK", "Feuern"), ("LEERTASTE", "Springen"),
-            ("SHIFT", "Sprinten"), ("Q", "Dash"), ("R", "Nachladen"), ("1 – 4 / RAD", "Waffe wechseln"),
+            ("SHIFT", "Sprinten"), ("Q", "Dash"), ("E", "Fähigkeit"), ("R", "Nachladen"), ("1 – 4 / RAD", "Waffe wechseln"),
             ("ESC", "Pause"), ("F", "Vollbild"), ("M", "Musik an/aus"),
         ]
         for (i, r) in rows.enumerated() {
@@ -502,7 +545,7 @@ final class HUD {
         }
     }
 
-    enum MenuHit { case map(Int), start }
+    enum MenuHit { case map(Int), start, labor, back, perk(Int), ability(Int), research(Int) }
 
     /// What the main menu has under a click (view coordinates, origin bottom-left).
     func menuHit(_ p: CGPoint) -> MenuHit? {
@@ -511,7 +554,12 @@ final class HUD {
             while let c = cur {
                 if let name = c.name {
                     if name == "start" { return .start }
+                    if name == "labor" { return .labor }
+                    if name == "back" { return .back }
                     if name.hasPrefix("map:"), let i = Int(name.dropFirst(4)) { return .map(i) }
+                    if name.hasPrefix("perk:"), let i = Int(name.dropFirst(5)) { return .perk(i) }
+                    if name.hasPrefix("ability:"), let i = Int(name.dropFirst(8)) { return .ability(i) }
+                    if name.hasPrefix("research:"), let i = Int(name.dropFirst(9)) { return .research(i) }
                 }
                 cur = c.parent
             }
@@ -519,8 +567,9 @@ final class HUD {
         return nil
     }
 
-    func showMenu(maps: [(id: MapID, best: Int, wave: Int)], selected: Int) {
+    func showMenu(maps: [(id: MapID, best: Int, wave: Int)], selected: Int, cores: Int, ability: String) {
         clearMenu()
+        menuNode.alpha = 1
         dim.alpha = 0.45
         gameLayer.alpha = 0
         title("NOVA BREACH", y: 250, size: 130)
@@ -574,22 +623,215 @@ final class HUD {
         }
 
         let ac = color(maps.indices.contains(selected) ? maps[selected].id.accent : V3(0.35, 0.92, 1.0))
-        let btn = SKShapeNode(rectOf: CGSize(width: 320, height: 56), cornerRadius: 8)
+        let btn = SKShapeNode(rectOf: CGSize(width: 300, height: 56), cornerRadius: 8)
         btn.name = "start"
-        btn.position = CGPoint(x: 0, y: -80)
+        btn.position = CGPoint(x: -135, y: -80)
         btn.fillColor = ac.withAlphaComponent(0.88); btn.strokeColor = .white; btn.lineWidth = 1.5
         btn.glowWidth = 3
         let bl = label("STARTEN", fontHeavy, 30, NSColor(srgbRed: 0.02, green: 0.04, blue: 0.07, alpha: 1), v: .center)
         btn.addChild(bl)
         btn.run(.repeatForever(.sequence([.fadeAlpha(to: 0.8, duration: 0.8), .fadeAlpha(to: 1, duration: 0.8)])))
         menuNode.addChild(btn)
-        let hint = label("← →  oder  1 / 2:  Map wählen    ·    Enter, Leertaste oder Klick:  Starten", fontDemi, 17, cDim)
+        // Labor: spend cores, pick the ability
+        let gold = color(Meta.coreColor)
+        let lab = SKShapeNode(rectOf: CGSize(width: 250, height: 56), cornerRadius: 8)
+        lab.name = "labor"
+        lab.position = CGPoint(x: 155, y: -80)
+        lab.fillColor = NSColor(white: 0, alpha: 0.55); lab.strokeColor = gold; lab.lineWidth = 2
+        let ll = label("LABOR", fontHeavy, 26, .white, h: .left, v: .center)
+        ll.position = CGPoint(x: -108, y: 7)
+        let lc = label("◆ \(cores)", fontHeavy, 22, gold, h: .right, v: .center)
+        lc.position = CGPoint(x: 108, y: 7)
+        let la = label("[E]  \(ability)", fontDemi, 13, cDim, h: .left, v: .center)
+        la.position = CGPoint(x: -108, y: -15)
+        for n in [ll, lc, la] { lab.addChild(n) }
+        menuNode.addChild(lab)
+        let hint = label("← →  oder  1 / 2:  Map wählen    ·    Enter:  Starten    ·    L:  Labor", fontDemi, 17, cDim)
         hint.position = CGPoint(x: 0, y: -134)
         menuNode.addChild(hint)
         controls(y: -180)
-        let foot = label("Überlebe so viele Wellen wie möglich. Alle 5 Wellen wartet ein Boss.", fontDemi, 17, NSColor(white: 1, alpha: 0.6))
+        let foot = label("Überlebe so viele Wellen wie möglich. Nach jeder Welle wählst du ein Upgrade, alle 5 Wellen wartet ein Boss.", fontDemi, 17, NSColor(white: 1, alpha: 0.6))
         foot.position = CGPoint(x: 0, y: -360)
         menuNode.addChild(foot)
+    }
+
+    /// Small rounded key cap with a label in it.
+    private func keyCap(_ text: String, _ c: NSColor, size: CGFloat = 34) -> SKShapeNode {
+        let kb = SKShapeNode(rectOf: CGSize(width: size, height: size), cornerRadius: 6)
+        kb.fillColor = c; kb.strokeColor = .clear
+        let k = label(text, fontHeavy, size * 0.62, NSColor(srgbRed: 0.02, green: 0.04, blue: 0.07, alpha: 1), v: .center)
+        kb.addChild(k)
+        return kb
+    }
+
+    /// Wrapped body text (top-left anchored).
+    private func paragraph(_ text: String, _ size: CGFloat, width: CGFloat, _ c: NSColor = NSColor(white: 1, alpha: 0.8)) -> SKLabelNode {
+        let l = label(text, fontDemi, size, c, h: .left, v: .top)
+        l.numberOfLines = 0
+        l.preferredMaxLayoutWidth = width
+        return l
+    }
+
+    /// Upgrade choice after a cleared wave: three cards, keys 1–3 or click.
+    func showPerks(_ cards: [PerkCard], wave: Int, cores: Int, next: (text: String, color: V3)) {
+        clearMenu()
+        menuNode.alpha = 1
+        dim.removeAllActions()
+        dim.alpha = 0.6
+        title("UPGRADE WÄHLEN", y: 250, size: 86)
+        let sub = label("WELLE \(wave) GESCHAFFT    ·    ◆ \(cores) KERNE", fontDemi, 22, cCyan)
+        sub.position = CGPoint(x: 0, y: 206)
+        menuNode.addChild(sub)
+
+        let cw: CGFloat = 340, ch: CGFloat = 310, spacing: CGFloat = 375
+        for (i, c) in cards.enumerated() {
+            let ac = color(c.color)
+            let card = SKShapeNode(rectOf: CGSize(width: cw, height: ch), cornerRadius: 12)
+            card.name = "perk:\(i)"
+            card.position = CGPoint(x: (CGFloat(i) - CGFloat(cards.count - 1) / 2) * spacing, y: 20)
+            card.fillColor = NSColor(srgbRed: 0.01, green: 0.03, blue: 0.06, alpha: 0.82)
+            card.strokeColor = ac; card.lineWidth = 2.5; card.glowWidth = 3
+            let kb = keyCap("\(i + 1)", ac)
+            kb.position = CGPoint(x: -cw / 2 + 32, y: ch / 2 - 32)
+            card.addChild(kb)
+            let tag = label(c.tag, fontDemi, 15, ac, h: .right, v: .center)
+            tag.position = CGPoint(x: cw / 2 - 18, y: ch / 2 - 32)
+            card.addChild(tag)
+            let name = label(c.name, fontHeavy, 25, .white, h: .left)
+            name.position = CGPoint(x: -cw / 2 + 18, y: ch / 2 - 92)
+            card.addChild(name)
+            let line = SKShapeNode(rectOf: CGSize(width: cw - 36, height: 2))
+            line.fillColor = ac.withAlphaComponent(0.6); line.strokeColor = .clear
+            line.position = CGPoint(x: 0, y: ch / 2 - 106)
+            card.addChild(line)
+            let d = paragraph(c.desc, 18, width: cw - 36)
+            d.position = CGPoint(x: -cw / 2 + 18, y: ch / 2 - 120)
+            card.addChild(d)
+            // level pips: owned, the new one, still open
+            if c.maxLevel > 1 {
+                let pw: CGFloat = 26
+                for k in 0..<c.maxLevel {
+                    let pip = SKShapeNode(rectOf: CGSize(width: pw, height: 8), cornerRadius: 2)
+                    pip.position = CGPoint(x: -cw / 2 + 18 + pw / 2 + CGFloat(k) * (pw + 6), y: -ch / 2 + 54)
+                    pip.strokeColor = ac.withAlphaComponent(0.6); pip.lineWidth = 1
+                    pip.fillColor = k < c.level ? ac.withAlphaComponent(0.55) : (k == c.level ? .white : .clear)
+                    card.addChild(pip)
+                }
+            }
+            let lv = c.level == 0 ? "NEU" : "STUFE \(c.level) → \(c.level + 1)"
+            let st = label(c.maxLevel > 1 ? "\(lv)   ·   MAX \(c.maxLevel)" : lv, fontHeavy, 16, c.level == 0 ? cOrange : cDim, h: .left)
+            st.position = CGPoint(x: -cw / 2 + 18, y: -ch / 2 + 22)
+            card.addChild(st)
+            card.alpha = 0
+            card.setScale(0.92)
+            let pop = SKAction.group([.fadeIn(withDuration: 0.2), .scale(to: 1, duration: 0.2)])
+            card.run(.sequence([.wait(forDuration: 0.08 * Double(i)), pop]))
+            menuNode.addChild(card)
+        }
+        let hint = label("TASTE 1 / 2 / 3  ODER  KLICKEN", fontHeavy, 20, cCyan)
+        hint.position = CGPoint(x: 0, y: -168)
+        hint.run(.repeatForever(.sequence([.fadeAlpha(to: 0.45, duration: 0.7), .fadeAlpha(to: 1, duration: 0.7)])))
+        menuNode.addChild(hint)
+        let nx = label(next.text, fontHeavy, 19, color(next.color))
+        nx.position = CGPoint(x: 0, y: -212)
+        menuNode.addChild(nx)
+        let note = label("Upgrades gelten bis zum Systemausfall. Kerne bleiben – im LABOR schaltest du damit neue Perks und Fähigkeiten frei.",
+                         fontDemi, 16, NSColor(white: 1, alpha: 0.55))
+        note.position = CGPoint(x: 0, y: -246)
+        menuNode.addChild(note)
+    }
+
+    /// Labor: buy and equip abilities, research perks for the upgrade pool.
+    func showLabor(cores: Int, abilities: [LaborItem], research: [LaborItem]) {
+        clearMenu()
+        menuNode.alpha = 1
+        dim.alpha = 0.7
+        gameLayer.alpha = 0
+        let gold = color(Meta.coreColor)
+        title("LABOR", y: 318, size: 96)
+        let sub = label("◆ \(cores) KERNE    ·    Kerne gibt es für jede Welle, für Bosse und für überstandene Wellen-Ereignisse",
+                        fontDemi, 19, gold)
+        sub.position = CGPoint(x: 0, y: 272)
+        menuNode.addChild(sub)
+
+        func section(_ text: String, _ hint: String, y: CGFloat) {
+            let t = label(text, fontHeavy, 22, .white, h: .left)
+            t.position = CGPoint(x: -615, y: y)
+            let h = label(hint, fontDemi, 16, cDim, h: .left)
+            h.position = CGPoint(x: -615 + CGFloat(text.count) * 12 + 28, y: y)
+            menuNode.addChild(t); menuNode.addChild(h)
+        }
+
+        func status(_ it: LaborItem, owned ownedText: String) -> (String, NSColor) {
+            if it.equipped { return ("AUSGERÜSTET", color(it.color)) }
+            if it.owned { return (ownedText, it.equipped ? color(it.color) : cDim) }
+            return ("◆ \(it.cost)   FREISCHALTEN", it.affordable ? gold : cRed.withAlphaComponent(0.8))
+        }
+
+        section("FÄHIGKEIT  [E]", "eine ist ausgerüstet – klicken zum Freischalten oder Wechseln", y: 236)
+        let aw: CGFloat = 292, ah: CGFloat = 160, aSpacing: CGFloat = 308
+        for (i, it) in abilities.enumerated() {
+            let ac = color(it.color)
+            let card = SKShapeNode(rectOf: CGSize(width: aw, height: ah), cornerRadius: 10)
+            card.name = "ability:\(i)"
+            card.position = CGPoint(x: (CGFloat(i) - CGFloat(abilities.count - 1) / 2) * aSpacing, y: 140)
+            card.fillColor = it.equipped ? ac.withAlphaComponent(0.16) : NSColor(white: 0, alpha: 0.55)
+            card.strokeColor = it.owned ? ac : ac.withAlphaComponent(0.35)
+            card.lineWidth = it.equipped ? 3 : 1.5
+            card.glowWidth = it.equipped ? 4 : 0
+            let n = label(it.name, fontHeavy, 22, it.owned ? .white : NSColor(white: 1, alpha: 0.7), h: .left)
+            n.position = CGPoint(x: -aw / 2 + 16, y: ah / 2 - 34)
+            card.addChild(n)
+            let cd = label(it.tag, fontDemi, 12, cDim, h: .right)
+            cd.position = CGPoint(x: aw / 2 - 14, y: ah / 2 - 32)
+            card.addChild(cd)
+            let d = paragraph(it.desc, 15, width: aw - 32)
+            d.position = CGPoint(x: -aw / 2 + 16, y: ah / 2 - 48)
+            card.addChild(d)
+            let (stText, stColor) = status(it, owned: "KLICKEN ZUM AUSRÜSTEN")
+            let st = label(stText, fontHeavy, 15, stColor, h: .left)
+            st.position = CGPoint(x: -aw / 2 + 16, y: -ah / 2 + 16)
+            card.addChild(st)
+            menuNode.addChild(card)
+        }
+
+        section("PERK-FORSCHUNG", "freigeschaltete Perks tauchen danach in der Upgrade-Wahl nach jeder Welle auf", y: 22)
+        let rw: CGFloat = 400, rh: CGFloat = 108, rxSpacing: CGFloat = 415, rySpacing: CGFloat = 120
+        for (i, it) in research.enumerated() {
+            let ac = color(it.color)
+            let col = i % 3, row = i / 3
+            let card = SKShapeNode(rectOf: CGSize(width: rw, height: rh), cornerRadius: 10)
+            card.name = "research:\(i)"
+            card.position = CGPoint(x: CGFloat(col - 1) * rxSpacing, y: -50 - CGFloat(row) * rySpacing)
+            card.fillColor = it.owned ? ac.withAlphaComponent(0.12) : NSColor(white: 0, alpha: 0.55)
+            card.strokeColor = it.owned ? ac : ac.withAlphaComponent(0.35)
+            card.lineWidth = it.owned ? 2 : 1.5
+            let n = label(it.name, fontHeavy, 20, it.owned ? .white : NSColor(white: 1, alpha: 0.75), h: .left)
+            n.position = CGPoint(x: -rw / 2 + 16, y: rh / 2 - 28)
+            card.addChild(n)
+            let tg = label(it.tag, fontDemi, 12, ac, h: .right)
+            tg.position = CGPoint(x: rw / 2 - 14, y: rh / 2 - 26)
+            card.addChild(tg)
+            let d = paragraph(it.desc, 14, width: rw - 32)
+            d.position = CGPoint(x: -rw / 2 + 16, y: rh / 2 - 40)
+            card.addChild(d)
+            let (stText, stColor) = it.owned ? ("ERFORSCHT", ac) : status(it, owned: "")
+            let st = label(stText, fontHeavy, 14, stColor, h: .right)
+            st.position = CGPoint(x: rw / 2 - 14, y: -rh / 2 + 12)
+            card.addChild(st)
+            menuNode.addChild(card)
+        }
+
+        let back = SKShapeNode(rectOf: CGSize(width: 240, height: 48), cornerRadius: 8)
+        back.name = "back"
+        back.position = CGPoint(x: 0, y: -330)
+        back.fillColor = cCyan.withAlphaComponent(0.85); back.strokeColor = .white; back.lineWidth = 1.5
+        let bl = label("ZURÜCK", fontHeavy, 26, NSColor(srgbRed: 0.02, green: 0.04, blue: 0.07, alpha: 1), v: .center)
+        back.addChild(bl)
+        menuNode.addChild(back)
+        let hint = label("Klick: freischalten / ausrüsten    ·    ESC oder L: zurück", fontDemi, 16, cDim)
+        hint.position = CGPoint(x: 0, y: -378)
+        menuNode.addChild(hint)
     }
 
     func showPause() {
@@ -615,20 +857,21 @@ final class HUD {
         let rows: [(String, String)] = [
             ("PUNKTE", formatScore(st.score)), ("ERREICHTE WELLE", "\(st.wave)"), ("ABSCHÜSSE", "\(st.kills)"),
             ("TREFFERQUOTE", "\(st.accuracy) %"), ("ÜBERLEBT", String(format: "%d:%02d", st.time / 60, st.time % 60)),
+            ("UPGRADES", "\(st.perks)"), ("KERNE", "+\(st.cores)   (◆ \(st.totalCores))"),
         ]
         for (i, r) in rows.enumerated() {
-            let k = label(r.0, fontDemi, 22, cDim, h: .right)
-            k.position = CGPoint(x: -20, y: 80 - CGFloat(i) * 36)
-            let v = label(r.1, fontHeavy, 28, .white, h: .left)
-            v.position = CGPoint(x: 20, y: 78 - CGFloat(i) * 36)
+            let k = label(r.0, fontDemi, 21, cDim, h: .right)
+            k.position = CGPoint(x: -20, y: 92 - CGFloat(i) * 30)
+            let v = label(r.1, fontHeavy, 25, i == rows.count - 1 ? color(Meta.coreColor) : .white, h: .left)
+            v.position = CGPoint(x: 20, y: 90 - CGFloat(i) * 30)
             menuNode.addChild(k); menuNode.addChild(v)
         }
         let b = label(st.newBest ? "NEUER REKORD!" : "REKORD   \(formatScore(st.best))", fontHeavy, 26, cOrange)
-        b.position = CGPoint(x: 0, y: -120)
+        b.position = CGPoint(x: 0, y: -146)
         menuNode.addChild(b)
-        prompt("KLICKEN ODER ENTER FÜR NEUEN VERSUCH", y: -190)
-        let back = label("Q  –  HAUPTMENÜ", fontHeavy, 19, cDim)
-        back.position = CGPoint(x: 0, y: -228)
+        prompt("KLICKEN ODER ENTER FÜR NEUEN VERSUCH", y: -200)
+        let back = label("Q  –  HAUPTMENÜ  ·  dort kannst du im LABOR Kerne ausgeben", fontHeavy, 19, cDim)
+        back.position = CGPoint(x: 0, y: -238)
         menuNode.addChild(back)
         if !st.mapName.isEmpty {
             let mn = label(st.mapName, fontDemi, 20, cDim)

@@ -75,6 +75,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if let path = autotest {
             game.demo = true
             game.demoMortal = CommandLine.arguments.contains("--mortal")
+            game.applyTestArgs()
             game.audio.setMaster(0)
             game.onCapture = { _ in }
             let startWave = Int(argValue("--wave") ?? "1") ?? 1
@@ -123,6 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 savePNG(self.view.snapshot(), path)
                 print("phase \(self.game.phase) hp \(Int(self.game.hp)) fxNodes \(self.game.fx.root.childNodes.count)")
                 print("autotest ok: wave \(self.game.wave) score \(self.game.score) kills \(self.game.kills) fps \(String(format: "%.0f", self.game.fpsAverage)) view \(Int(self.view.bounds.width))x\(Int(self.view.bounds.height))")
+                print("progression: perks \(self.game.perkLevels.map { "\($0.key.rawValue)=\($0.value)" }.sorted().joined(separator: ",")) cores +\(self.game.runCores) event \(self.game.event?.rawValue ?? "-") ability \(self.game.meta.ability.rawValue)")
                 exit(0)
             }
         } else {
@@ -197,6 +199,7 @@ func runHeadless(dir: String, startWave: Int, seconds: Double, every: Double) {
     let game = Game(viewSize: size, audioEnabled: false)
     game.demo = true
     game.demoMortal = CommandLine.arguments.contains("--mortal")
+    game.applyTestArgs()
     if let m = MapID.fromArg(argValue("--map")) { game.setMap(m) }
     let renderer = SCNRenderer(device: MTLCreateSystemDefaultDevice(), options: nil)
     renderer.scene = game.scene
@@ -238,6 +241,7 @@ func runHeadless(dir: String, startWave: Int, seconds: Double, every: Double) {
         }
     }
     print("headless ok: wave \(game.wave) score \(game.score) kills \(game.kills) enemies \(game.enemies.count) sim \(seconds)s in \(String(format: "%.1f", Date().timeIntervalSince(wall)))s")
+    print("progression: perks \(game.perkLevels.map { "\($0.key.rawValue)=\($0.value)" }.sorted().joined(separator: ",")) cores +\(game.runCores) event \(game.event?.rawValue ?? "-") turrets \(game.turrets.count)")
 }
 
 /// Renders every enemy type side by side (model check).
