@@ -14,13 +14,17 @@ swiftc -O -wmo -swift-version 5 -target arm64-apple-macos13.0 Sources/*.swift -o
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 
 echo "==> Rendere Icon"
-"$BIN" --icon build/icon_1024.png
-for s in 16 32 128 256 512; do
-    sips -z $s $s build/icon_1024.png --out "build/icon.iconset/icon_${s}x${s}.png" >/dev/null
-    d=$((s * 2))
-    sips -z $d $d build/icon_1024.png --out "build/icon.iconset/icon_${s}x${s}@2x.png" >/dev/null
-done
-iconutil -c icns build/icon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
+# with a 2-minute limit: on build servers without a GPU the app is built without its own icon
+if perl -e 'alarm shift; exec @ARGV' 120 "$BIN" --icon build/icon_1024.png && [ -f build/icon_1024.png ]; then
+    for s in 16 32 128 256 512; do
+        sips -z $s $s build/icon_1024.png --out "build/icon.iconset/icon_${s}x${s}.png" >/dev/null
+        d=$((s * 2))
+        sips -z $d $d build/icon_1024.png --out "build/icon.iconset/icon_${s}x${s}@2x.png" >/dev/null
+    done
+    iconutil -c icns build/icon.iconset -o "$APP/Contents/Resources/AppIcon.icns"
+else
+    echo "    Icon konnte nicht gerendert werden – App ohne eigenes Icon"
+fi
 
 echo "==> Signiere (ad hoc)"
 codesign --force --deep --sign - "$APP"

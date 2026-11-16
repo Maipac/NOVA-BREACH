@@ -1,0 +1,69 @@
+# Baut die Mac-App (dmg) und die native Windows-exe und stellt beide
+# als Release "latest" auf GitHub bereit (Seite "Releases" im Repo).
+name: Build
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  workflow_dispatch:
+
+concurrency:
+  group: build-release
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows-exe
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: MinGW-w64 installieren
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq g++-mingw-w64-x86-64-win32 binutils-mingw-w64-x86-64
+      - name: Bauen
+        run: CXX=x86_64-w64-mingw32-g++-win32 windows/build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: dist/windows-native/NovaBreach.exe
+
+  mac:
+    name: Mac-dmg
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Bauen
+        run: ./build.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac
+          path: dist/NovaBreach.dmg
+
+  release:
+    name: Release
+    needs: [windows, mac]
+    # die exe wird auch veröffentlicht, wenn der Mac-Build scheitert
+    if: ${{ !cancelled() && needs.windows.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+      - name: Release "latest" ersetzen
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          files=(out/windows/NovaBreach.exe)
+          [ -f out/mac/NovaBreach.dmg ] && files+=(out/mac/NovaBreach.dmg)
+          cat > notes.md <<EOF
+          Automatisch gebaut aus \`${GITHUB_REF_NAME}\` (Commit ${GITHUB_SHA::7}).
+
+          - **NovaBreach.exe**: Windows 10/11, 64 Bit. Einfach starten. SmartScreen: *Weitere Informationen* → *Trotzdem ausführen*.
+          - **NovaBreach.dmg**: Mac mit Apple Silicon, ab macOS 13. Öffnen, App nach *Programme* ziehen. Beim ersten Start Rechtsklick → *Öffnen*.
+          EOF
+          gh release delete latest --yes --cleanup-tag || true
+          gh release create latest "${files[@]}" --target "$GITHUB_SHA" --title "NOVA BREACH – neuester Build" --notes-file notes.md

@@ -8,7 +8,9 @@ alles (Texturen, Modelle, Skybox, Sounds, Musik) wird beim Start prozedural erze
 
 ## Spielen
 
-`dist/NovaBreach.dmg` öffnen, **NOVA BREACH** nach *Programme* ziehen, starten.
+Fertige Downloads (Mac-dmg und Windows-exe) gibt es rechts auf der Repo-Seite unter **Releases** → *NOVA BREACH – neuester Build*. GitHub Actions baut sie bei jedem Push automatisch neu (`.github/workflows/build.yml`).
+
+`NovaBreach.dmg` öffnen, **NOVA BREACH** nach *Programme* ziehen, starten.
 
 | Taste | Aktion |
 |---|---|
@@ -87,7 +89,7 @@ Erforschte Perks tauchen danach in der Upgrade-Wahl auf.
 
 ## Windows (nativ)
 
-`dist/windows-native/NovaBreach.exe` auf einen Windows-PC (10/11, 64 Bit) kopieren und starten. Eine einzige Datei, kein Installer, keine Laufzeitumgebung – sie braucht nur DirectX 11 und XAudio2, die bei Windows dabei sind. Ohne Audiogerät läuft das Spiel einfach stumm.
+`NovaBreach.exe` aus den Releases (oder selbst gebaut aus `dist/windows-native/`) auf einem Windows-PC (10/11, 64 Bit) starten. Eine einzige Datei, kein Installer, keine Laufzeitumgebung – sie braucht nur DirectX 11 und XAudio2, die bei Windows dabei sind. Ohne Audiogerät läuft das Spiel einfach stumm.
 
 Das ist ein Port der Mac-Version nach C++17 mit Win32, Direct3D 11 und XAudio2 und hat alles, was die Mac-Version hat: beide Maps, den Endgegner in Welle 15, Upgrades nach jeder Welle, Kerne und Labor, Fähigkeiten auf E und Wellen-Ereignisse. Die Grafik ist an SceneKit angelehnt: PBR-Materialien mit Bildbasierter Beleuchtung, Schatten der Sonne, Spiegelungen im Boden, HDR mit Bloom, 4× MSAA und Filmlook (ACES, Vignette, Farbsäume). Texturen, Modelle, Skybox, Sounds und Musik werden wie auf dem Mac beim Start erzeugt.
 
