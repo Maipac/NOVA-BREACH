@@ -10,6 +10,7 @@ enum Key {
     static let e: UInt16 = 14, r: UInt16 = 15, n1: UInt16 = 18, n2: UInt16 = 19, n3: UInt16 = 20, n4: UInt16 = 21
     static let ret: UInt16 = 36, m: UInt16 = 46, space: UInt16 = 49, esc: UInt16 = 53, shift: UInt16 = 56
     static let left: UInt16 = 123, right: UInt16 = 124
+    static let l: UInt16 = 37, backspace: UInt16 = 51
 }
 
 struct InputFrame {
@@ -80,11 +81,15 @@ final class Weapon {
     var ammo: Int
     var reserve: Int
     var cooldown: Float = 0
+    /// current magazine size and reserve cap (perks raise them, reset() puts the defaults back)
+    var mag: Int
+    var reserveMax: Int
     init(_ def: WeaponDef, _ node: SCNNode, _ muzzle: SCNNode, _ flash: SCNNode) {
         self.def = def; self.node = node; self.muzzle = muzzle; self.flash = flash
         ammo = def.mag; reserve = def.reserveStart
+        mag = def.mag; reserveMax = def.reserveMax
     }
-    func reset() { ammo = def.mag; reserve = def.reserveStart; cooldown = 0 }
+    func reset() { mag = def.mag; reserveMax = def.reserveMax; ammo = mag; reserve = def.reserveStart; cooldown = 0 }
 }
 
 final class Projectile {
@@ -98,13 +103,19 @@ final class Projectile {
     let color: V3
     let gravity: Float
     let node: SCNNode
+    /// share of the damage the player takes from their own explosion
+    var selfDamage: Float = 0.22
+    /// plasma mod: bursts into bomblets
+    var split = false
+    /// grenade / bomblet: does not count as a shot for accuracy and never splits
+    var sub = false
     init(pos: V3, vel: V3, damage: Float, splash: Float, fromPlayer: Bool, life: Float, radius: Float, color: V3, gravity: Float, node: SCNNode) {
         self.pos = pos; self.vel = vel; self.damage = damage; self.splash = splash; self.fromPlayer = fromPlayer
         self.life = life; self.radius = radius; self.color = color; self.gravity = gravity; self.node = node
     }
 }
 
-enum PickupKind { case health, ammo, power }
+enum PickupKind { case health, ammo, power, core }
 
 final class Pickup {
     let kind: PickupKind
@@ -115,7 +126,8 @@ final class Pickup {
     init(kind: PickupKind, pos: V3, node: SCNNode) { self.kind = kind; self.pos = pos; self.node = node }
 }
 
-enum Phase { case menu, playing, paused, dead }
+/// perks: the upgrade choice after a wave (world frozen, cursor free)
+enum Phase { case menu, playing, paused, dead, perks }
 
 // MARK: - Game
 
@@ -142,7 +154,7 @@ final class Game: NSObject, SCNSceneRendererDelegate {
     var phase = Phase.menu
     var time: Float = 0
     var lastRenderTime: TimeInterval = 0
-    var demo = false
+    var demo = false { didSet { meta.persist = !demo } }
     /// set from the main thread when the app loses focus
     var pauseRequested = false
     var autoStart = false
@@ -210,6 +222,36 @@ final class Game: NSObject, SCNSceneRendererDelegate {
     var timeAlive: Float = 0
     var bossCount = 0
 
+    // progression: perks of this run, persistent cores/unlocks, the active ability, wave events
+    let meta = Meta()
+    var perkLevels: [PerkID: Int] = [:]
+    var perkChoices: [PerkID] = []
+    /// > 0: seconds until the upgrade choice opens after a cleared wave
+    var perkPending: Float = -1
+    var perkT: Float = 0
+    var maxHp: Float = 100
+    var maxShield: Float = 100
+    var invulnT: Float = 0
+    var secondWindUsed = false
+    var runCores = 0
+    var bossKills = 0
+    /// the main menu shows the Labor instead of the map cards
+    var labor = false
+    var abilityCD: Float = 0
+    var slowT: Float = 0
+    var turrets: [Turret] = []
+    var barrier: Barrier? = nil
+    var event: WaveEvent? = nil
+    var nextEvent: WaveEvent? = nil
+    var lastEvent: WaveEvent? = nil
+    var dimmedLights: [(light: SCNLight, intensity: CGFloat)] = []
+    var savedEnvironment: (light: CGFloat, sky: CGFloat)? = nil
+    /// helmet lamp for the blackout event
+    let flashlight = SCNNode()
+    /// test hooks from the command line (--perks, --event)
+    var testPerks: [PerkID] = []
+    var testEvent: WaveEvent? = nil
+
     var eye: V3 { V3(pos.x, pos.y + eyeY, pos.z) }
     var viewDir: V3 { V3(-sin(yaw) * cos(pitch), sin(pitch), -cos(yaw) * cos(pitch)) }
     var fwd: V3 { V3(-sin(yaw), 0, -cos(yaw)) }
@@ -252,6 +294,22 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         camera.fieldOfView = CGFloat(fov)
         camNode.camera = camera
         scene.rootNode.addChildNode(camNode)
+        // helmet lamp (only switched on during a blackout; category 1 like the effect lights so it skips the view model)
+        let lamp = SCNLight()
+        lamp.type = .spot
+        lamp.color = color(1.0, 0.94, 0.84)
+        lamp.intensity = 3400
+        lamp.spotInnerAngle = 14
+        lamp.spotOuterAngle = 44
+        lamp.attenuationStartDistance = 2
+        lamp.attenuationEndDistance = 42
+        lamp.attenuationFalloffExponent = 2
+        lamp.castsShadow = false
+        lamp.categoryBitMask = 1
+        flashlight.light = lamp
+        flashlight.simdPosition = V3(0.2, -0.15, 0)
+        flashlight.isHidden = true
+        camNode.addChildNode(flashlight)
         weaponRoot.simdScale = V3(0.2, 0.2, 0.2)
         camNode.addChildNode(weaponRoot)
         weaponRoot.addChildNode(weaponHolder)
@@ -301,6 +359,8 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         case .menu:
             updateMenuCamera(dtReal)
             fx.update(dtReal)
+            if labor { updateLabor(inp); return }
+            if inp.hit(Key.l) { openLabor(); return }
             let n = MapID.allCases.count
             if inp.hit(Key.left) || inp.hit(Key.a) { setMap(MapID(rawValue: (mapID.rawValue + n - 1) % n)!) }
             if inp.hit(Key.right) || inp.hit(Key.d) { setMap(MapID(rawValue: (mapID.rawValue + 1) % n)!) }
@@ -312,10 +372,13 @@ final class Game: NSObject, SCNSceneRendererDelegate {
                     // clicking the selected card starts it, clicking the other one selects it
                     if i == mapID.rawValue { start = true } else if let m = MapID(rawValue: i) { setMap(m) }
                 case .start?: start = true
-                case nil: break
+                case .labor?: openLabor(); return
+                default: break
                 }
             }
             if start { autoStart = false; startGame() }
+        case .perks:
+            updatePerkChoice(dtReal, inp)
         case .paused:
             if inp.hit(Key.q) { goToMenu(); return }
             if inp.clicked || inp.hit(Key.esc) || inp.hit(Key.ret) { setPaused(false) }
@@ -355,6 +418,10 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         for p in projectiles { p.node.removeFromParentNode() }
         for p in pickups { p.node.removeFromParentNode() }
         enemies.removeAll(); projectiles.removeAll(); pickups.removeAll()
+        for t in turrets { t.node.removeFromParentNode() }
+        turrets.removeAll()
+        barrier?.node.removeFromParentNode()
+        barrier = nil
         fx.clear()
         for i in 0..<gateBoost.count { gateBoost[i] = 0 }
         for m in level.portalMaterials { m.setValue(NSNumber(value: 0.0), forKey: "u_boost") }
@@ -363,7 +430,7 @@ final class Game: NSObject, SCNSceneRendererDelegate {
     func showMainMenu() {
         let d = UserDefaults.standard
         let maps = MapID.allCases.map { (id: $0, best: d.integer(forKey: $0.scoreKey), wave: d.integer(forKey: $0.waveKey)) }
-        hud.showMenu(maps: maps, selected: mapID.rawValue)
+        hud.showMenu(maps: maps, selected: mapID.rawValue, cores: meta.cores, ability: meta.ability.name)
     }
 
     /// Switches the arena while the main menu is open (the menu camera orbits the selected map).
@@ -381,6 +448,9 @@ final class Game: NSObject, SCNSceneRendererDelegate {
 
     func goToMenu() {
         clearWorld()
+        endEvent()
+        resetAbilityEffects()
+        labor = false
         phase = .menu
         scene.isPaused = false
         weaponRoot.isHidden = true
@@ -396,6 +466,11 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         clearWorld()
         hud.resetTransient()
         pos = level.playerStart; vel = V3(0, 0, 0); yaw = level.playerYaw; pitch = 0
+        endEvent()
+        resetAbilityEffects()
+        perkLevels.removeAll(); perkChoices.removeAll(); perkPending = -1
+        maxHp = 100; maxShield = 100; invulnT = 0; secondWindUsed = false; runCores = 0; bossKills = 0
+        abilityCD = 0; lastEvent = nil
         hp = 100; shield = 100; sinceHurt = 10; onGround = true
         dashCD = 0; dashT = 0; overcharge = 0; eyeY = 1.7; deadT = 0
         for w in weapons { w.reset(); w.node.isHidden = true }
@@ -404,6 +479,8 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         weaponRoot.isHidden = false
         wave = 0; spawnQueue.removeAll(); intermission = 2.5; waveActive = false
         score = 0; combo = 0; comboT = 0; kills = 0; shotsFired = 0; shotsHit = 0; timeAlive = 0; bossCount = 0
+        nextEvent = rollEvent(for: 1)
+        for p in testPerks where perk(p) < p.maxLevel { applyPerk(p) }
         scene.isPaused = false
         phase = .playing
         hud.showGame()
@@ -430,7 +507,8 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         if newBest && !demo { d.set(score, forKey: mapID.scoreKey) }
         if wave > d.integer(forKey: mapID.waveKey) && !demo { d.set(wave, forKey: mapID.waveKey) }
         let acc = shotsFired > 0 ? Int(Float(shotsHit) / Float(shotsFired) * 100) : 0
-        hud.showGameOver(GameOverStats(score: score, wave: wave, kills: kills, accuracy: min(acc, 100), best: max(best, score), newBest: newBest, time: Int(timeAlive), mapName: mapID.name))
+        hud.showGameOver(GameOverStats(score: score, wave: wave, kills: kills, accuracy: min(acc, 100), best: max(best, score), newBest: newBest, time: Int(timeAlive),
+                                       mapName: mapID.name, cores: runCores, totalCores: meta.cores, perks: perkLevels.values.reduce(0, +)))
         DispatchQueue.main.async { self.onCapture?(false) }
     }
 
@@ -462,6 +540,7 @@ final class Game: NSObject, SCNSceneRendererDelegate {
     func simulate(_ dt: Float, _ inp: InputFrame) {
         updatePlayer(dt, inp)
         updateWeapons(dt, inp)
+        updateAbility(dt, inp)
         updateWorld(dt)
         updateWaves(dt)
         fx.update(dt)
@@ -475,9 +554,12 @@ final class Game: NSObject, SCNSceneRendererDelegate {
             navT = 0.14
             level.nav.rebuild(target: pos)
         }
-        updateEnemies(dt)
+        // Zeitlupe slows the machines, never the player or their shots
+        updateEnemies(dt * enemyTimeScale)
         updateProjectiles(dt)
         updatePickups(dt)
+        updateTurrets(dt)
+        updateBarrier(dt)
         for i in 0..<min(gateBoost.count, level.portalMaterials.count) where gateBoost[i] > 0 {
             gateBoost[i] = max(0, gateBoost[i] - dt * 1.5)
             level.portalMaterials[i].setValue(NSNumber(value: gateBoost[i]), forKey: "u_boost")
@@ -498,13 +580,13 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         let wl = simd_length(wish)
         if wl > 0 { wish /= wl }
         let sprint = inp.down(Key.shift) && inp.down(Key.w) && wl > 0
-        let maxSpeed: Float = sprint ? 9.6 : 6.6
+        let maxSpeed: Float = (sprint ? 9.6 : 6.6) * moveMul
 
         // dash
         dashCD = max(0, dashCD - dt)
         if inp.hit(Key.q) && dashCD <= 0 {
             dashDir = wl > 0 ? wish : fwd
-            dashT = 0.17; dashCD = 2.2
+            dashT = 0.17; dashCD = dashCooldown
             audio.play("dash")
             fx.shake(0.12)
         }
@@ -526,10 +608,10 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         jumpBuffer = inp.hit(Key.space) ? 0.12 : max(0, jumpBuffer - dt)
         coyote = onGround ? 0.1 : max(0, coyote - dt)
         if jumpBuffer > 0 && coyote > 0 {
-            vel.y = 7.8; onGround = false; coyote = 0; jumpBuffer = 0
+            vel.y = event == .lowGravity ? 7.2 : 7.8; onGround = false; coyote = 0; jumpBuffer = 0
             audio.play("jump", vol: 0.5)
         }
-        vel.y -= 21 * dt
+        vel.y -= 21 * gravityScale * dt
 
         // horizontal move + collision
         var p = V3(pos.x + vel.x * dt, pos.y, pos.z + vel.z * dt)
@@ -561,7 +643,8 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         let sp = len2(vel)
         if onGround && sp > 1 { bob += dt * sp * 1.25 }
         sinceHurt += dt
-        if sinceHurt > 4 && shield < 100 { shield = min(100, shield + 24 * dt) }
+        if sinceHurt > 4 && shield < maxShield && event != .emp { shield = min(maxShield, shield + 24 * shieldRegenMul * dt) }
+        if invulnT > 0 { invulnT -= dt }
         if overcharge > 0 { overcharge = max(0, overcharge - dt) }
         if combo > 0 { comboT -= dt / 4.5; if comboT <= 0 { combo = 0 } }
         let targetFov: Float = 64 + (sprint ? 5 : 0) + (dashT > 0 ? 10 : 0)
@@ -619,13 +702,15 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         }
         hud.setRadar(pts, range: 34)
         let boss = enemies.first { $0.kind.isBoss && !$0.dead }
-        hud.update(dt: dt, hp: hp, shield: shield, ammo: w.ammo, reserve: w.def.reserveMax < 0 ? -1 : w.reserve,
+        hud.update(dt: dt, hp: hp, hpMax: maxHp, shield: shield, shieldMax: maxShield, ammo: w.ammo, reserve: w.reserveMax < 0 ? -1 : w.reserve,
                    weaponName: w.def.name, weaponIndex: cur, weaponNames: weapons.map { $0.def.short },
                    weaponUsable: weapons.map { $0.ammo > 0 || $0.reserve != 0 }, weaponColor: w.def.color,
                    spread: w.def.spread * (w.def.pellets > 1 ? 0.5 : 1) + bloom, reloading: reloadT,
-                   dash: 1 - dashCD / 2.2, overcharge: overcharge, score: score, combo: comboMult, comboT: comboT,
+                   dash: 1 - dashCD / dashCooldown, overcharge: overcharge, score: score, combo: comboMult, comboT: comboT,
                    wave: max(wave, 1), enemiesLeft: spawnQueue.count + enemies.filter { !$0.dead }.count,
                    bossName: boss.map { $0.kind == .tyrant ? "HITLER" : "OVERSEER  MK \(bossCount)" }, bossHp: boss.map { $0.hp / $0.maxHp } ?? 0)
+        updateAbilityHUD()
+        hud.setEvent(event.map { "◆ \($0.name)" }, color: event?.color ?? V3(1, 1, 1))
     }
 
     var comboMult: Int { min(1 + combo / 4, 8) }
@@ -633,7 +718,7 @@ final class Game: NSObject, SCNSceneRendererDelegate {
     // MARK: player damage
 
     func hurtPlayer(_ amount: Float, from src: V3?) {
-        guard phase == .playing, dashT <= 0 else { return }
+        guard phase == .playing, dashT <= 0, invulnT <= 0 else { return }
         if demo && !demoMortal { return }
         var a = amount
         sinceHurt = 0
@@ -654,21 +739,27 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         }
         hud.damage(amount: amount, angle: ang)
         fx.shake(min(0.5, 0.12 + amount / 50))
-        if hp <= 0 { die() }
+        if hp <= 0 {
+            if hasPerk(.secondWind) && !secondWindUsed { triggerSecondWind() } else { die() }
+        }
     }
 
     // MARK: waves
 
     func updateWaves(_ dt: Float) {
         if !waveActive {
+            if perkPending > 0 {
+                perkPending -= dt
+                if perkPending <= 0 { perkPending = -1; openPerkChoice(); return }
+            }
             intermission -= dt
-            if intermission <= 0 { startWave() }
+            if intermission <= 0 && perkPending <= 0 { startWave() }
             return
         }
         let alive = enemies.count
         if !spawnQueue.isEmpty {
             spawnT -= dt
-            let cap = min(8 + wave * 2, 26)
+            let cap = event == .swarm ? min(14 + wave * 3, 34) : min(8 + wave * 2, 26)
             if spawnT <= 0 && alive < cap {
                 spawnEnemy(spawnQueue.removeFirst())
                 spawnT = max(0.22, 0.95 - Float(wave) * 0.045) * frand(0.7, 1.3)
@@ -678,8 +769,18 @@ final class Game: NSObject, SCNSceneRendererDelegate {
             intermission = 5.5
             let bonus = 250 * wave
             score += bonus
-            hud.announce("WELLE \(wave) GESCHAFFT", sub: "+\(bonus) Bonus  ·  nächste Welle in 5 Sekunden", color: NSColor(srgbRed: 0.4, green: 1, blue: 0.6, alpha: 1), hold: 2.2)
+            // cores: more for later waves, extra for surviving an event
+            var gained = 1 + wave / 5
+            if let ev = event {
+                gained += ev.bonusCores
+                lastEvent = ev
+                endEvent()
+            }
+            earnCores(gained)
+            hud.announce("WELLE \(wave) GESCHAFFT", sub: "+\(bonus) Bonus  ·  +\(gained) Kerne", color: NSColor(srgbRed: 0.4, green: 1, blue: 0.6, alpha: 1), hold: 2.2)
             audio.play("waveClear")
+            nextEvent = rollEvent(for: wave + 1)
+            perkPending = 1.4
             // resupply
             var spots = level.pickupSpots.shuffled()
             spawnPickup(.health, at: spots.removeFirst())
@@ -693,6 +794,8 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         waveActive = true
         spawnT = 0.6
         let isBoss = wave % 5 == 0
+        event = isBoss ? nil : nextEvent
+        nextEvent = nil
         var budget = 4.5 + Float(wave) * 3.0 + pow(Float(wave), 1.3)
         if isBoss { budget *= 0.45 }
         var pool: [EnemyKind] = [.skitter, .skitter]
@@ -701,6 +804,10 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         if wave >= 4 { pool += [.roller] }
         if wave >= 6 { pool += [.brute] }
         if wave >= 9 { pool += [.trooper, .brute, .roller] }
+        if event == .swarm {
+            pool = [.skitter, .skitter, .skitter, .drone, .roller]
+            budget *= 1.5
+        }
         var q: [EnemyKind] = []
         var guardCount = 0
         while budget > 0.9 && guardCount < 200 {
@@ -718,6 +825,10 @@ final class Game: NSObject, SCNSceneRendererDelegate {
             hud.announce(tyrantWave ? "ENDGEGNER" : "WARNUNG", sub: tyrantWave ? "HITLER betritt die Arena" : "OVERSEER nähert sich",
                          color: NSColor(srgbRed: 1, green: 0.2, blue: 0.15, alpha: 1), hold: tyrantWave ? 3 : 2.4)
             audio.play("boss")
+        } else if let ev = event {
+            hud.announce("WELLE \(wave)", sub: "\(ev.name)  ·  \(ev.desc)", color: color(ev.color), hold: 2.4)
+            audio.play("wave", vol: 0.8)
+            beginEvent(ev)
         } else {
             hud.announce("WELLE \(wave)", sub: "\(q.count) Feindkontakte", hold: 1.5)
             audio.play("wave", vol: 0.8)
@@ -739,6 +850,7 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         }
         let hpScale = 1 + Float(wave - 1) * 0.07 + (kind == .boss ? Float(bossCount - 1) * 0.45 : 0)
         let e = Enemy(kind: kind, pos: p, hpScale: hpScale)
+        if event == .frenzy { e.speed *= 1.35 }
         e.yaw = atan2(pos.x - p.x, pos.z - p.z)
         scene.rootNode.addChildNode(e.node)
         enemies.append(e)
@@ -777,5 +889,6 @@ final class Game: NSObject, SCNSceneRendererDelegate {
         }
         demoWeaponT += 1.0 / 60
         if demoWeaponT > 5 { demoWeaponT = 0; inp.pressed.append([Key.n1, Key.n2, Key.n3, Key.n4][(cur + 1) % 4]) }
+        if best != nil && abilityCD <= 0 && frand() < 0.01 { inp.pressed.append(Key.e) }
     }
 }

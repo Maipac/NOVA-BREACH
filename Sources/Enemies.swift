@@ -73,6 +73,10 @@ final class Enemy {
     var debrisMat: SCNMaterial
     /// tyrant: sign of the last footstep phase (a change means a foot hit the floor)
     var stepSign: Float = 1
+    /// scatter mod: seconds left burning, damage per second, timer for the flame puffs
+    var burnT: Float = 0
+    var burnDps: Float = 0
+    var burnFxT: Float = 0
 
     var forward: V3 { V3(sin(yaw), 0, cos(yaw)) }
     var right: V3 { V3(cos(yaw), 0, -sin(yaw)) }

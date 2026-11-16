@@ -1,0 +1,27 @@
+// App icon (rendered by the game itself with --icon, see README) and file properties.
+#include <windows.h>
+
+1 ICON "icon.ico"
+
+VS_VERSION_INFO VERSIONINFO
+FILEVERSION 1, 1, 0, 0
+PRODUCTVERSION 1, 1, 0, 0
+FILEOS VOS_NT_WINDOWS32
+FILETYPE VFT_APP
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040704B0"
+        BEGIN
+            VALUE "FileDescription", "NOVA BREACH"
+            VALUE "ProductName", "NOVA BREACH"
+            VALUE "FileVersion", "1.1.0"
+            VALUE "ProductVersion", "1.1.0"
+            VALUE "OriginalFilename", "NovaBreach.exe"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0407, 1200
+    END
+END

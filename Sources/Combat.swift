@@ -117,8 +117,8 @@ extension Game {
 
     func startReload() {
         let w = weapons[cur]
-        guard reloadT <= 0, w.ammo < w.def.mag, w.def.reserveMax < 0 || w.reserve > 0 else { return }
-        reloadDur = w.def.reload
+        guard reloadT <= 0, w.ammo < w.mag, w.reserveMax < 0 || w.reserve > 0 else { return }
+        reloadDur = w.def.reload * reloadMul
         reloadT = reloadDur
         audio.play("reload", vol: 0.8)
     }
@@ -145,8 +145,8 @@ extension Game {
         if reloadT > 0 {
             reloadT -= dt
             if reloadT <= 0 {
-                let need = w.def.mag - w.ammo
-                if w.def.reserveMax < 0 { w.ammo = w.def.mag } else {
+                let need = w.mag - w.ammo
+                if w.reserveMax < 0 { w.ammo = w.mag } else {
                     let take = min(need, w.reserve)
                     w.ammo += take; w.reserve -= take
                 }
@@ -157,7 +157,7 @@ extension Game {
         if inp.hit(Key.r) { startReload(); return }
         if inp.fire && w.cooldown <= 0 {
             if w.ammo <= 0 {
-                if w.def.reserveMax < 0 || w.reserve > 0 { startReload() } else if inp.clicked {
+                if w.reserveMax < 0 || w.reserve > 0 { startReload() } else if inp.clicked {
                     audio.play("empty")
                     hud.feedLine("\(w.def.name): keine Munition", NSColor(srgbRed: 1, green: 0.4, blue: 0.3, alpha: 1))
                     // fall back to the rifle so the player is never stuck
@@ -181,9 +181,9 @@ extension Game {
     private func fire(_ w: Weapon) {
         let def = w.def
         w.ammo -= 1
-        w.cooldown = def.interval * (overcharge > 0 ? 0.8 : 1)
+        w.cooldown = def.interval * (overcharge > 0 ? 0.8 : 1) / fireRateMul
         shotsFired += 1
-        let dmgMul: Float = overcharge > 0 ? 2 : 1
+        let dmgMul: Float = (overcharge > 0 ? 2 : 1) * damageMul
         kickZ = min(0.13, kickZ + def.kick * 0.7)
         kickRot = min(0.3, kickRot + def.kick * 0.9)
         recoilPitch += def.kick * 0.12
@@ -207,8 +207,10 @@ extension Game {
         switch def.kind {
         case .hitscan:
             let movePenalty: Float = (onGround ? 0 : 0.012) + min(len2(vel) / 9.6, 1) * 0.004
-            for _ in 0..<def.pellets {
-                let d = spreadDir(def.spread + bloom + movePenalty)
+            // pulse mod: two beams per shot
+            let twin = def.pellets == 1 && cur == 0 && hasPerk(.pulseTwin)
+            for k in 0..<(twin ? 2 : def.pellets) {
+                let d = spreadDir(def.spread + bloom + movePenalty + (twin ? 0.004 : 0))
                 let wall = level.raycast(o, d, 220)
                 var bestT = wall?.t ?? 220
                 var bestE: Enemy? = nil
@@ -217,14 +219,20 @@ extension Game {
                     if let h = e.rayHit(o, d, bestT) { bestT = h.t; bestE = e; crit = h.crit }
                 }
                 let end = o + d * bestT
-                fx.tracer(from: tracerStart, to: end, def.color, width: def.pellets > 1 ? 0.018 : 0.024, life: 0.07, intensity: def.pellets > 1 ? 1.6 : 2.6)
+                let side = twin ? rightV * (k == 0 ? -0.06 : 0.06) : V3(0, 0, 0)
+                fx.tracer(from: tracerStart + side, to: end, def.color, width: def.pellets > 1 ? 0.018 : 0.024, life: 0.07, intensity: def.pellets > 1 ? 1.6 : 2.6)
                 if let e = bestE {
-                    var dmg = def.damage * dmgMul
+                    var dmg = def.damage * dmgMul * (twin ? 0.7 : 1)
                     if def.pellets > 1 { dmg *= clampf(1.25 - bestT / 34, 0.35, 1) }
                     damageEnemy(e, dmg * (crit ? 2 : 1), at: end, dir: d, crit: crit)
                     anyHit = true
+                    if cur == 0 && hasPerk(.pulseRicochet) { ricochet(from: end, after: e, damage: dmg * 0.5, color: def.color) }
+                    if cur == 1 && hasPerk(.scatterBurn) { ignite(e) }
                 } else if let wl = wall {
                     fx.impact(at: end, normal: wl.n, def.color)
+                    if cur == 1 && hasPerk(.scatterBounce) && bounce(from: end, dir: d, normal: wl.n, damage: def.damage * dmgMul * 0.6, color: def.color) {
+                        anyHit = true
+                    }
                 }
             }
             if def.pellets == 1 { bloom = min(0.028, bloom + 0.0045) }
@@ -232,8 +240,10 @@ extension Game {
             let d = viewDir
             let wall = level.raycast(o, d, 260)
             let maxT = wall?.t ?? 260
+            var struck: [Enemy] = []
             for e in enemies where !e.dead {
                 if let h = e.rayHit(o, d, maxT, inflate: 0.12) {
+                    struck.append(e)
                     damageEnemy(e, def.damage * dmgMul * (h.crit ? 1.6 : 1), at: o + d * h.t, dir: d, crit: h.crit)
                     anyHit = true
                 }
@@ -241,11 +251,20 @@ extension Game {
             let end = o + d * maxT
             fx.railBeam(from: tracerStart, to: end, def.color)
             if let wl = wall { fx.impact(at: end, normal: wl.n, def.color, big: true) }
+            if hasPerk(.railChain) && !struck.isEmpty { chainLightning(from: struck, damage: def.damage * dmgMul * 0.4, color: def.color) }
+            if hasPerk(.railNova) && wall != nil {
+                fx.explosion(at: end, radius: 3.2, def.color, shakeAmount: 0.3)
+                audio.play("explosion", at: end, listener: pos, yaw: yaw, vol: 0.7)
+                radialDamage(at: end, radius: 4.5, damage: 90 * dmgMul, playerDamage: 0)
+            }
         case .launcher:
             let d = viewDir
             let start = o + d * 0.9 + rightV * 0.16 - V3(0, 0.14, 0)
-            spawnProjectile(pos: start, vel: d * 40 + V3(0, 1.2, 0), damage: def.damage * dmgMul, splash: 5.5, fromPlayer: true,
-                            life: 5, radius: 0.22, color: def.color, gravity: 5, big: true)
+            let heavy = hasPerk(.plasmaHeavy)
+            let shot = spawnProjectile(pos: start, vel: d * 40 + V3(0, 1.2, 0), damage: def.damage * dmgMul, splash: heavy ? 8.25 : 5.5, fromPlayer: true,
+                                       life: 5, radius: heavy ? 0.3 : 0.22, color: def.color, gravity: 5, big: true)
+            if heavy { shot.selfDamage = 0 }
+            shot.split = hasPerk(.plasmaSplit)
             anyHit = false
         }
         if anyHit { shotsHit += 1 }
@@ -253,11 +272,14 @@ extension Game {
 
     // MARK: - damage
 
-    func damageEnemy(_ e: Enemy, _ amount: Float, at p: V3, dir: V3, crit: Bool, silent: Bool = false) {
+    /// dot: damage over time (burning) – no white flash, no knockback
+    func damageEnemy(_ e: Enemy, _ amount: Float, at p: V3, dir: V3, crit: Bool, silent: Bool = false, dot: Bool = false) {
         if e.dead { return }
         e.hp -= amount
-        if e.flash <= 0 { e.setFlash(true) }
-        e.flash = 0.07
+        if !dot {
+            if e.flash <= 0 { e.setFlash(true) }
+            e.flash = 0.07
+        }
         e.sees = true
         let killed = e.hp <= 0
         if !silent {
@@ -265,7 +287,7 @@ extension Game {
             hud.hit(kill: killed, crit: crit)
             if hitSoundT <= 0 { audio.play(crit ? "crit" : "hit", vol: 0.5); hitSoundT = 0.04 }
         }
-        if !e.kind.isBoss && e.kind != .brute {
+        if !e.kind.isBoss && e.kind != .brute && !dot {
             e.vel += V3(dir.x, 0, dir.z) * min(amount * 0.06, 4)
         }
         if killed { killEnemy(e) }
@@ -309,12 +331,16 @@ extension Game {
             hud.announce(tyrant ? "HITLER BESIEGT" : "OVERSEER ZERSTÖRT", sub: "+\(e.kind.score * comboMult)", color: NSColor(srgbRed: 1, green: 0.8, blue: 0.3, alpha: 1), hold: tyrant ? 3 : 2)
             if tyrant { audio.play("waveClear") }
             for _ in 0..<(tyrant ? 4 : 3) { spawnPickup([.health, .ammo, .power].randomElement()!, at: V3(c.x + frand(-3, 3), 0, c.z + frand(-3, 3))) }
+            bossKills += 1
+            let bc = tyrant ? 15 : 5
+            earnCores(bc)
+            hud.feedLine("+\(bc) Kerne", color(Meta.coreColor))
         }
         guard scoreIt else { return }
         kills += 1
         combo += 1
         comboT = 1
-        let pts = e.kind.score * comboMult
+        let pts = e.kind.score * comboMult * (event == .frenzy ? 2 : 1)
         score += pts
         hud.feedLine("\(e.kind.displayName)  +\(pts)")
         if hitSoundT <= 0.03 { audio.play("kill", vol: 0.6) }
@@ -326,6 +352,9 @@ extension Game {
             let hpNeed = hp < 60
             let kind: PickupKind = r < (hpNeed ? 0.6 : 0.35) ? .health : (r < 0.92 ? .ammo : .power)
             spawnPickup(kind, at: V3(c.x, level.groundHeight(c.x, c.z, radius: 0.2, feetY: 2.5), c.z))
+        }
+        if event == .coreRush && !e.kind.isBoss && frand() < 0.3 {
+            spawnPickup(.core, at: V3(c.x + frand(-0.6, 0.6), level.groundHeight(c.x, c.z, radius: 0.2, feetY: 2.5), c.z + frand(-0.6, 0.6)))
         }
     }
 
@@ -352,7 +381,8 @@ extension Game {
 
     // MARK: - projectiles
 
-    func spawnProjectile(pos p: V3, vel v: V3, damage: Float, splash: Float, fromPlayer: Bool, life: Float, radius: Float, color c: V3, gravity: Float, big: Bool) {
+    @discardableResult
+    func spawnProjectile(pos p: V3, vel v: V3, damage: Float, splash: Float, fromPlayer: Bool, life: Float, radius: Float, color c: V3, gravity: Float, big: Bool) -> Projectile {
         let n = SCNNode()
         let core = Geo.sphere(radius * 0.7, segments: 10)
         core.materials = [Mat.additive(nil, mix3(c, V3(1, 1, 1), 0.6), 3)]
@@ -367,16 +397,27 @@ extension Game {
         }
         n.simdPosition = p
         scene.rootNode.addChildNode(n)
-        projectiles.append(Projectile(pos: p, vel: v, damage: damage, splash: splash, fromPlayer: fromPlayer, life: life, radius: radius, color: c, gravity: gravity, node: n))
+        let pr = Projectile(pos: p, vel: v, damage: damage, splash: splash, fromPlayer: fromPlayer, life: life, radius: radius, color: c, gravity: gravity, node: n)
+        projectiles.append(pr)
+        return pr
     }
 
     func updateProjectiles(_ dt: Float) {
         var i = 0
         while i < projectiles.count {
             let p = projectiles[i]
-            p.life -= dt
-            if p.gravity != 0 { p.vel.y -= p.gravity * dt }
-            let step = p.vel * dt
+            // Zeitlupe slows enemy fire only
+            let pdt = p.fromPlayer ? dt : dt * enemyTimeScale
+            if !p.fromPlayer, let b = barrier, simd_distance(p.pos, b.pos) < b.radius {
+                // the Kraftfeld swallows enemy fire
+                fx.glowPop(at: p.pos, AbilityID.barrier.color, size: 1.3, intensity: 1.8, life: 0.16)
+                p.node.removeFromParentNode()
+                projectiles.remove(at: i)
+                continue
+            }
+            p.life -= pdt
+            if p.gravity != 0 { p.vel.y -= p.gravity * gravityScale * pdt }
+            let step = p.vel * pdt
             let l = simd_length(step)
             let d = l > 1e-6 ? step / l : V3(0, -1, 0)
             var hitT = l
@@ -410,8 +451,9 @@ extension Game {
                     if p.fromPlayer {
                         var hitAny = false
                         for e in enemies where !e.dead && simd_distance(e.center, at) - e.radius < p.splash { hitAny = true; break }
-                        if hitAny { shotsHit += 1; hud.hit(kill: false, crit: false) }
-                        radialDamage(at: at, radius: p.splash, damage: p.damage, playerDamage: p.damage * 0.22)
+                        if hitAny { if !p.sub { shotsHit += 1 }; hud.hit(kill: false, crit: false) }
+                        radialDamage(at: at, radius: p.splash, damage: p.damage, playerDamage: p.damage * p.selfDamage)
+                        if p.split && !p.sub { scatterBomblets(at: at - d * 0.3, color: p.color) }
                     } else {
                         let dist = simd_distance(pos + V3(0, 0.9, 0), at)
                         if dist < p.splash { hurtPlayer(p.damage * clampf(1.15 - dist / p.splash, 0.25, 1), from: at) }
@@ -459,6 +501,12 @@ extension Game {
             let m = Mat.glow(c, 5)
             Geo.part(spin, Geo.pyramid(0.4, 0.38, 0.4), m, V3(0, 0, 0), shadow: false)
             Geo.part(spin, Geo.pyramid(0.4, 0.38, 0.4), m, V3(0, 0, 0), rot: V3(.pi, 0, 0), shadow: false)
+        case .core:
+            c = Meta.coreColor
+            let m = Mat.glow(c, 6)
+            Geo.part(spin, Geo.pyramid(0.28, 0.3, 0.28), m, V3(0, 0, 0), shadow: false)
+            Geo.part(spin, Geo.pyramid(0.28, 0.3, 0.28), m, V3(0, 0, 0), rot: V3(.pi, 0, 0), shadow: false)
+            Geo.part(spin, Geo.torus(0.34, 0.022), Mat.glow(V3(1, 0.95, 0.8), 4), V3(0, 0, 0), rot: V3(.pi / 2, 0, 0), shadow: false)
         }
         spin.runAction(.repeatForever(.rotateBy(x: 0, y: 2 * .pi, z: 0, duration: 2.4)))
         let g = Geo.glowSprite(1.7, c, 0.7); n.addChildNode(g)
@@ -489,22 +537,22 @@ extension Game {
             if phase == .playing {
                 var wanted = true
                 switch p.kind {
-                case .health: wanted = hp < 100
-                case .ammo: wanted = weapons.contains { $0.def.reserveMax > 0 && $0.reserve < $0.def.reserveMax }
-                case .power: wanted = true
+                case .health: wanted = hp < maxHp
+                case .ammo: wanted = weapons.contains { $0.reserveMax > 0 && $0.reserve < $0.reserveMax }
+                case .power, .core: wanted = true
                 }
                 if wanted && d < 4.5 { p.pos += safeNorm(chest - p.pos) * min(d, dt * (4 + (4.5 - d) * 5)) }
                 if wanted && d < 1.3 {
                     remove = true
                     switch p.kind {
                     case .health:
-                        hp = min(100, hp + 30)
+                        hp = min(maxHp, hp + 30)
                         hud.feedLine("+30 Vital", NSColor(srgbRed: 0.4, green: 1, blue: 0.6, alpha: 1))
                         hud.flash(NSColor(srgbRed: 0.3, green: 1, blue: 0.5, alpha: 1), 0.18, 0.35)
                         audio.play("pickup")
                     case .ammo:
-                        for w in weapons where w.def.reserveMax > 0 {
-                            w.reserve = min(w.def.reserveMax, w.reserve + max(1, Int(Float(w.def.reserveMax) * 0.35)))
+                        for w in weapons where w.reserveMax > 0 {
+                            w.reserve = min(w.reserveMax, w.reserve + max(1, Int(Float(w.reserveMax) * 0.35)))
                         }
                         hud.feedLine("Munition aufgefüllt", NSColor(srgbRed: 1, green: 0.7, blue: 0.3, alpha: 1))
                         hud.flash(NSColor(srgbRed: 1, green: 0.6, blue: 0.2, alpha: 1), 0.15, 0.35)
@@ -514,6 +562,11 @@ extension Game {
                         hud.announce("ÜBERLADUNG", sub: "Doppelter Schaden · schnellere Feuerrate", color: NSColor(srgbRed: 0.8, green: 0.5, blue: 1, alpha: 1), hold: 1.2)
                         hud.flash(NSColor(srgbRed: 0.7, green: 0.4, blue: 1, alpha: 1), 0.3, 0.5)
                         audio.play("power")
+                    case .core:
+                        earnCores(1)
+                        hud.feedLine("+1 Kern", color(Meta.coreColor))
+                        hud.flash(color(Meta.coreColor), 0.12, 0.3)
+                        audio.play("pickup", vol: 0.8)
                     }
                 }
             }
@@ -563,6 +616,7 @@ extension Game {
 
     func updateEnemies(_ dt: Float) {
         let alive = phase == .playing
+        let aggro: Float = event == .frenzy ? 1.35 : 1
         let playerChest = pos + V3(0, 1.1, 0)
         // soft separation so they do not stack
         let n = enemies.count
@@ -606,7 +660,17 @@ extension Game {
                 e.losT = 0.2
                 e.sees = level.lineOfSight(e.kind.flies ? e.pos : e.pos + V3(0, e.height * 0.8, 0), playerChest)
             }
-            e.attackCD -= dt
+            if e.burnT > 0 {
+                e.burnT -= dt
+                e.burnFxT -= dt
+                if e.burnFxT <= 0 {
+                    e.burnFxT = 0.14
+                    fx.glowPop(at: e.center + randUnit() * e.radius * 0.7, V3(1.0, 0.45, 0.1), size: 0.6 + e.radius * 0.5, intensity: 1.4, life: 0.3)
+                }
+                damageEnemy(e, e.burnDps * dt, at: e.center, dir: V3(0, 1, 0), crit: false, silent: true, dot: true)
+                if e.dead { continue }
+            }
+            e.attackCD -= dt * aggro
             let to = V2(pos.x - e.pos.x, pos.z - e.pos.z)
             let dist = simd_length(to)
             let toN = dist > 1e-3 ? to / dist : V2(0, 1)
