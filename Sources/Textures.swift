@@ -586,21 +586,28 @@ enum Tex {
 
     /// Art-directed light rig used for image based lighting (gives metals colourful reflections).
     static func makeEnv(_ w: Int, _ h: Int) -> CGImage {
-        return proceduralImage(w, h) { u, v in
-            let d = equirectDir(u, v)
-            let y = d.y
-            var col = y < 0 ? V3(0.03, 0.033, 0.04) : mix3(V3(0.10, 0.11, 0.14), V3(0.03, 0.035, 0.06), y)
-            let az = atan2(d.x, -d.z)
-            let seg = fract(az / (2 * .pi) * 8 + 0.5)
-            let panel = sstep(0.12, 0.2, seg) * sstep(0.88, 0.8, seg)
-            let idx = Int(Foundation.floor(az / (2 * .pi) * 8 + 0.5 + 8)) % 8
-            let pcol = idx % 2 == 0 ? V3(0.15, 0.85, 1.0) : V3(1.0, 0.25, 0.65)
-            col += pcol * panel * sstep(0.06, 0.12, y) * sstep(0.30, 0.22, y) * 0.9
-            col += V3(1.0, 0.6, 0.25) * panel * sstep(0.5, 0.55, y) * sstep(0.66, 0.6, y) * (idx % 4 == 1 ? 1.0 : 0.0)
-            col += V3(0.9, 0.95, 1.0) * sstep(0.86, 0.95, y) * 1.1
-            let s = max(simd_dot(d, sunDir), 0)
-            col += V3(1.0, 0.9, 0.75) * pow(s, 40) * 1.5
-            return SIMD4(col.x, col.y, col.z, 1)
+        return proceduralImage(w, h) { (u: Float, v: Float) -> SIMD4<Float> in
+            // split into small typed steps: newer Swift compilers give up on the long one-liners
+            let d: V3 = equirectDir(u, v)
+            let y: Float = d.y
+            var col: V3 = y < 0 ? V3(0.03, 0.033, 0.04) : mix3(V3(0.10, 0.11, 0.14), V3(0.03, 0.035, 0.06), y)
+            let az: Float = atan2(d.x, -d.z)
+            let turns: Float = az / (2 * Float.pi) * 8
+            let seg: Float = fract(turns + 0.5)
+            let panel: Float = sstep(0.12, 0.2, seg) * sstep(0.88, 0.8, seg)
+            let idx: Int = Int(Foundation.floor(turns + 0.5 + 8)) % 8
+            let pcol: V3 = idx % 2 == 0 ? V3(0.15, 0.85, 1.0) : V3(1.0, 0.25, 0.65)
+            let bandLow: Float = panel * sstep(0.06, 0.12, y) * sstep(0.30, 0.22, y) * 0.9
+            col += pcol * bandLow
+            let warm: Float = idx % 4 == 1 ? 1 : 0
+            let bandHigh: Float = panel * sstep(0.5, 0.55, y) * sstep(0.66, 0.6, y) * warm
+            col += V3(1.0, 0.6, 0.25) * bandHigh
+            let top: Float = sstep(0.86, 0.95, y) * 1.1
+            col += V3(0.9, 0.95, 1.0) * top
+            let s: Float = max(simd_dot(d, sunDir), 0)
+            let sun: Float = pow(s, 40) * 1.5
+            col += V3(1.0, 0.9, 0.75) * sun
+            return SIMD4<Float>(col.x, col.y, col.z, 1)
         }
     }
 }
